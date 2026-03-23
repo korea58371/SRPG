@@ -12,10 +12,11 @@ export const MAP_CONFIG = {
 
 // 유닛 설정
 export const UNIT_CONFIG = {
-  INITIAL_SPAWN_COUNT: 150,
-  HERO_UNIT_COUNT: 5,
-  BASE_SPEED_MIN: 1,
-  BASE_SPEED_MAX: 2,
+  INITIAL_SPAWN_COUNT: 40,       // 전체 병력 (PLAYER_COUNT + 적군)
+  PLAYER_UNIT_COUNT: 10,        // 아군 (서양 제국)
+  HERO_UNIT_COUNT: 3,           // 지휘관 (hisize+처리)
+  BASE_SPEED_MIN: 2,
+  BASE_SPEED_MAX: 3,
   SIZE_NORMAL: { width: 20, height: 28 },
   SIZE_HERO: { width: 28, height: 36 },
 };
@@ -40,11 +41,11 @@ export const FACTIONS = {
 
 // 지형 특수 효과: 방어력 증감(%), 타일 이동시 소비되는 페널티 수치 비율
 export const TERRAIN_BONUS = {
-  [TerrainType.GRASS]: { defenseMod: 0, moveCost: 1.0 },
-  [TerrainType.CLIFF]: { defenseMod: 0.3, moveCost: 3.0 }, // 방어 30% 증가, 이동비용 3배
-  [TerrainType.PATH]:  { defenseMod: -0.1, moveCost: 0.5 },// 방어 -10% 하락, 이동속도 2배 버프
+  [TerrainType.GRASS]: { defenseMod: 0,    moveCost: 1.0 },
+  [TerrainType.CLIFF]: { defenseMod: 0,    moveCost: 99.0 }, // 절벽: 완전 이동 불가 (추후 병종별 확장 가능)
+  [TerrainType.PATH]:  { defenseMod: -0.1, moveCost: 0.5 },  // 길: 이동 2배 가속
   [TerrainType.BEACH]: { defenseMod: -0.2, moveCost: 1.5 },
-  [TerrainType.SEA]:   { defenseMod: -0.5, moveCost: 99.0 },// 사실상 진입 불가
+  [TerrainType.SEA]:   { defenseMod: -0.5, moveCost: 99.0 }, // 바다: 완전 이동 불가
 };
 
 // 병종간 극한 상성 (가위바위보): 데미지 가중치 적용 (%)
@@ -55,9 +56,9 @@ export const UNIT_MATCHUPS = {
   ARCHER: { advantage: 'NONE', disadvantage: 'NONE', bonus: 0 },
 };
 
-export const BASE_STATS = {
-  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 2 },
-  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 1.5 },
-  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 3 },
-  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 2 },
+export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number }> = {
+  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 2,   attackRange: 1 },
+  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 1.5, attackRange: 2 }, // 스피어: 사셀 2
+  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 3,   attackRange: 1 },
+  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 2,   attackRange: 3 }, // 궁병: 사셠 3
 };

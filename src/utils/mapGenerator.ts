@@ -1,6 +1,9 @@
 import { createNoise2D } from 'simplex-noise';
-import { TerrainType, type Point } from '../types/gameTypes';
+import { TerrainType } from '../types/gameTypes';
 import { MAP_CONFIG } from '../constants/gameConfig';
+
+// mapGenerator 내부 전용 좌표 타입 (TilePos와 별개로 x,y 사용)
+interface Point { x: number; y: number; }
 
 // A* 패스파인딩 알고리즘
 export function findPath(map: TerrainType[][], start: Point, end: Point): Point[] {
