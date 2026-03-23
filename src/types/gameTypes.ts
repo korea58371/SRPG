@@ -6,6 +6,7 @@ export const TerrainType = {
   GRASS: 2,
   CLIFF: 3,
   PATH: 4,
+  FOREST: 5,
 } as const;
 
 export type TerrainType = typeof TerrainType[keyof typeof TerrainType];
@@ -13,6 +14,9 @@ export type TerrainType = typeof TerrainType[keyof typeof TerrainType];
 export type FactionId = 'western_empire' | 'eastern_alliance' | 'neutral';
 export type UnitType = 'INFANTRY' | 'SPEARMAN' | 'CAVALRY' | 'ARCHER';
 export type UnitState = 'IDLE' | 'MOVING' | 'ATTACKING' | 'DEAD';
+
+// defensive: 아군이 거점 수비, offensive: 아군이 길목에서 공격
+export type BattleType = 'defensive' | 'offensive';
 
 export interface TilePos {
   lx: number;

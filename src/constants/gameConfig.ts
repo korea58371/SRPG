@@ -41,11 +41,12 @@ export const FACTIONS = {
 
 // 지형 특수 효과: 방어력 증감(%), 타일 이동시 소비되는 페널티 수치 비율
 export const TERRAIN_BONUS = {
-  [TerrainType.GRASS]: { defenseMod: 0,    moveCost: 1.0 },
-  [TerrainType.CLIFF]: { defenseMod: 0,    moveCost: 99.0 }, // 절벽: 완전 이동 불가 (추후 병종별 확장 가능)
-  [TerrainType.PATH]:  { defenseMod: -0.1, moveCost: 0.5 },  // 길: 이동 2배 가속
+  [TerrainType.GRASS]: { defenseMod: 0, moveCost: 1.0 },
+  [TerrainType.CLIFF]: { defenseMod: 0, moveCost: 99.0 }, // 절벽: 완전 이동 불가
+  [TerrainType.PATH]: { defenseMod: -0.1, moveCost: 0.5 },  // 길: 이동 2배 가속
   [TerrainType.BEACH]: { defenseMod: -0.2, moveCost: 1.5 },
-  [TerrainType.SEA]:   { defenseMod: -0.5, moveCost: 99.0 }, // 바다: 완전 이동 불가
+  [TerrainType.SEA]: { defenseMod: -0.5, moveCost: 99.0 }, // 바다: 완전 이동 불가
+  [TerrainType.FOREST]: { defenseMod: 0.2, moveCost: 2.5 },  // 숲: 방어+20%, 이동 저항 높음
 };
 
 // 병종간 극한 상성 (가위바위보): 데미지 가중치 적용 (%)
@@ -57,8 +58,8 @@ export const UNIT_MATCHUPS = {
 };
 
 export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number }> = {
-  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 2,   attackRange: 1 },
-  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 1.5, attackRange: 2 }, // 스피어: 사셀 2
-  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 3,   attackRange: 1 },
-  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 2,   attackRange: 3 }, // 궁병: 사셠 3
+  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 3, attackRange: 1 },
+  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 2.5, attackRange: 2 }, // 스피어: 사셀 2
+  CAVALRY: { hp: 80, attack: 20, defense: 8, speed: 4, attackRange: 1 },
+  ARCHER: { hp: 60, attack: 18, defense: 5, speed: 3, attackRange: 3 }, // 궁병: 사셠 3
 };

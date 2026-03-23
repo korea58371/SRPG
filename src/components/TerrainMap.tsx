@@ -10,11 +10,12 @@ import { MAP_CONFIG } from '../constants/gameConfig';
 import * as PIXI from 'pixi.js';
 
 const COLORS: Record<number, number> = {
-  [TerrainType.SEA]:   0x1c4587, // 짙은 파란색
-  [TerrainType.BEACH]: 0xe6b8af, // 연살색 모래
-  [TerrainType.GRASS]: 0x38761d, // 초원 녹색
-  [TerrainType.CLIFF]: 0x4a3623, // 짙은 갈색 절벽
-  [TerrainType.PATH]:  0xd2b48c, // 연갈색 길
+  [TerrainType.SEA]:    0x1c4587, // 짙은 파란색
+  [TerrainType.BEACH]:  0xe6b8af, // 연살색 모래
+  [TerrainType.GRASS]:  0x8BAA68, // 올리브 세이지 초원
+  [TerrainType.CLIFF]:  0x4a3623, // 짙은 갈색 절벽
+  [TerrainType.PATH]:   0xEDE8D0, // 밝은 아이보리 길
+  [TerrainType.FOREST]: 0x263A18, // 짙은 암녹색 숲
 };
 
 export default function TerrainMap() {

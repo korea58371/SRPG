@@ -10,9 +10,12 @@ import UnitsLayer from './components/UnitsLayer';
 import MoveRangeLayer from './components/MoveRangeLayer';
 import PathLayer from './components/PathLayer';
 import AttackRangeLayer from './components/AttackRangeLayer';
+import CitiesLayer from './components/CitiesLayer';
 import CloudShadow from './components/CloudShadow';
 import ActionMenu from './components/ActionMenu';
 import FloatingDamageLayer from './components/FloatingDamageLayer';
+import UnitInfoPanel from './components/UnitInfoPanel';
+import TurnEndPrompt from './components/TurnEndPrompt';
 import { useGameStore } from './store/gameStore';
 import { generateMapData } from './utils/mapGenerator';
 import { MAP_CONFIG } from './constants/gameConfig';
@@ -43,6 +46,7 @@ function TurnHUD() {
   const units          = useGameStore(s => s.units);
   const selectUnit     = useGameStore(s => s.selectUnit);
   const endPlayerTurn  = useGameStore(s => s.endPlayerTurn);
+  const biome          = useGameStore(s => s.biome);
 
   const handleDeselect = useCallback(() => selectUnit(null), [selectUnit]);
   const isPlayerTurn = currentTurn === 'player';
@@ -54,10 +58,13 @@ function TurnHUD() {
 
   return (
     <>
-      {/* 상단 좌: 타이틀 */}
+      {/* 상단 좌: 타이틀 + 바이옴 */}
       <div className="absolute top-0 left-0 p-4 pointer-events-none">
         <h1 className="text-white text-2xl font-extrabold drop-shadow-lg">⚔️ Fantasy SRPG</h1>
         <p className="text-gray-400 text-xs mt-1">Turn {turnNumber}</p>
+        {biome && (
+          <p className="text-gray-500 text-xs mt-0.5">🗺 {biome.label}</p>
+        )}
       </div>
 
       {/* 상단 우: 현재 턴 + 전력 현황 */}
@@ -111,21 +118,35 @@ function TurnHUD() {
 // ─── App ─────────────────────────────────────────────────────────────────────
 function App() {
   const setMapData          = useGameStore(s => s.setMapData);
+  const setCities           = useGameStore(s => s.setCities);
+  const setBattleType       = useGameStore(s => s.setBattleType);
+  const setBiome            = useGameStore(s => s.setBiome);
   const initUnits           = useGameStore(s => s.initUnits);
   const mapData             = useGameStore(s => s.mapData);
+  const units               = useGameStore(s => s.units);
   const selectUnit          = useGameStore(s => s.selectUnit);
   const selectedUnitId      = useGameStore(s => s.selectedUnitId);
   const cancelConfirmedMove = useGameStore(s => s.cancelConfirmedMove);
   const confirmedDest       = useGameStore(s => s.confirmedDestination);
 
-  useEffect(() => {
-    const { map } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
-    setMapData(map);
-  }, [setMapData]);
+  const isReady = mapData !== null;
+  const isStarted = Object.keys(units).length > 0;
 
   useEffect(() => {
-    if (mapData) initUnits(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
-  }, [mapData, initUnits]);
+    const { map, cities, biome } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+    setMapData(map);
+    setCities(cities);
+    setBiome(biome);
+  }, [setMapData, setCities, setBiome]);
+  // initUnits는 전장 타입 선택 후 수동 호출
+
+  const handleStartBattle = useCallback((type: 'defensive' | 'offensive') => {
+    setBattleType(type);
+    // setBattleType은 동기적이라 바로 store가 업데이트되지 않으므로
+    // useGameStore.setState 후 initUnits 순서로 처리
+    useGameStore.setState({ battleType: type });
+    initUnits(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+  }, [setBattleType, initUnits]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -141,6 +162,7 @@ function App() {
         options={{ autoDensity: true, resolution: window.devicePixelRatio, backgroundColor: 0x111111 }}
       >
         <TerrainMap />
+        <CitiesLayer />
         <MoveRangeLayer />
         <AttackRangeLayer />
         <PathLayer />
@@ -148,8 +170,38 @@ function App() {
         <CloudShadow />
       </Stage>
 
+      {/* ── 전장 타입 선택 오버레이 (유닛 미배치 상태에서만 표시) ── */}
+      {isReady && !isStarted && (
+        <div className="absolute inset-0 flex items-center justify-center z-50">
+          <div className="bg-black/80 border border-gray-600 rounded-2xl p-10 flex flex-col items-center gap-6 shadow-2xl">
+            <h2 className="text-white text-3xl font-extrabold tracking-wide">⚔️ 전장 선택</h2>
+            <p className="text-gray-400 text-sm">배치 방식이 달라집니다</p>
+            <div className="flex gap-6 mt-2">
+              <button
+                onClick={() => handleStartBattle('defensive')}
+                className="flex flex-col items-center gap-2 bg-blue-900/80 border border-blue-500 hover:bg-blue-700/80 text-white px-8 py-5 rounded-xl transition-all cursor-pointer"
+              >
+                <span className="text-4xl">🛡</span>
+                <span className="font-bold text-lg">수비전</span>
+                <span className="text-xs text-blue-300 text-center max-w-[140px]">아군이 거점 주변 배치<br />적군은 맵 가장자리에서 침입</span>
+              </button>
+              <button
+                onClick={() => handleStartBattle('offensive')}
+                className="flex flex-col items-center gap-2 bg-red-900/80 border border-red-500 hover:bg-red-700/80 text-white px-8 py-5 rounded-xl transition-all cursor-pointer"
+              >
+                <span className="text-4xl">⚔️</span>
+                <span className="font-bold text-lg">공격전</span>
+                <span className="text-xs text-red-300 text-center max-w-[140px]">아군이 길목(좌측)에서 진격<br />적군은 거점 주변 방어</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TurnHUD />
       <ActionMenu />
+      <TurnEndPrompt />
+      <UnitInfoPanel />
       <FloatingDamageLayer />
       <CombatLog />
     </div>

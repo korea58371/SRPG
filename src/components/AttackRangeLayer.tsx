@@ -59,8 +59,8 @@ export default function AttackRangeLayer() {
             g.lineStyle(2, 0xff0000, 0.8);
           }
         } else {
-          g.beginFill(0xff8800, attackTargetMode ? 0.12 : 0.18);
-          g.lineStyle(1, 0xff6600, 0.35);
+          g.beginFill(0xff4444, 0.28);
+          g.lineStyle(1, 0xff2222, 0.35);
         }
         g.drawRect(tx * TILE, ty * TILE, TILE, TILE);
         g.endFill();

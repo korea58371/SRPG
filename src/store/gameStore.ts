@@ -6,10 +6,11 @@
 //         → 경로 이동 + 전투 처리 → 턴 종료
 
 import { create } from 'zustand';
-import type { Unit, FactionId, UnitType, TilePos } from '../types/gameTypes';
+import type { Unit, FactionId, UnitType, TilePos, BattleType } from '../types/gameTypes';
 import { TerrainType } from '../types/gameTypes';
 import { MAP_CONFIG, UNIT_CONFIG, BASE_STATS, UNIT_MATCHUPS } from '../constants/gameConfig';
 import { calcMoveRange, findMovePath } from '../utils/moveRange';
+import type { BiomeConfig } from '../utils/mapGenerator';
 
 // ─── 스폰 가능 여부 ──────────────────────────────────────────────────────────
 const isSpawnBlockedTile = (type: TerrainType): boolean =>
@@ -92,6 +93,9 @@ export interface FloatingDamage {
 interface GameState {
   units: Record<string, Unit>;
   mapData: TerrainType[][] | null;
+  cities: { x: number; y: number }[];
+  battleType: BattleType;
+  biome: BiomeConfig | null;
   currentTurn: TurnPhase;
   turnNumber: number;
   selectedUnitId: string | null;
@@ -104,12 +108,15 @@ interface GameState {
   combatLog: string[];
   floatingDamages: FloatingDamage[];
 
-  // 코공 타곸 선택 모드
+  // 공격 타겟 선택 모드
   attackTargetMode: boolean;       // true일 때 AttackRangeLayer 타일이 클릭 가능
   enterAttackTargetMode: () => void;
   executeAttackOnTarget: (targetId: string) => void;
 
   setMapData: (data: TerrainType[][]) => void;
+  setCities: (cities: { x: number; y: number }[]) => void;
+  setBattleType: (type: BattleType) => void;
+  setBiome: (biome: BiomeConfig) => void;
   initUnits: (mapWidth: number, mapHeight: number) => void;
   selectUnit: (id: string | null) => void;
   setHoveredMoveTile: (tile: TilePos | null) => void;
@@ -118,12 +125,19 @@ interface GameState {
   executeAction: (action: ActionMenuType) => void;
   endPlayerTurn: () => void;
   removeFloatingDamage: (id: string) => void;
+
+  // 유닛 정보 패널
+  hoveredUnitId: string | null;
+  setHoveredUnitId: (id: string | null) => void;
 }
 
 // ─── Store 생성 ────────────────────────────────────────────────────────────
 export const useGameStore = create<GameState>((set, get) => ({
   units: {},
   mapData: null,
+  cities: [],
+  battleType: 'defensive',
+  biome: null,
   currentTurn: 'player',
   turnNumber: 1,
   selectedUnitId: null,
@@ -135,6 +149,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   combatLog: [],
   floatingDamages: [],
   attackTargetMode: false,
+  hoveredUnitId: null,
+
+  setHoveredUnitId: (id) => set({ hoveredUnitId: id }),
 
   removeFloatingDamage: (id) => set(s => ({ floatingDamages: s.floatingDamages.filter(d => d.id !== id) })),
 
@@ -155,44 +172,114 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   setMapData: (data) => set({ mapData: data }),
+  setCities: (cities) => set({ cities }),
+  setBattleType: (type) => set({ battleType: type }),
+  setBiome: (biome) => set({ biome }),
 
-  // ─── 유닛 초기 배치 ─────────────────────────────────────────────────────
+  // ─── 유닛 초기 배치 ───────────────────────────────────────────
   initUnits: (mapWidth, mapHeight) => {
     const newUnits: Record<string, Unit> = {};
     const usedTiles = new Set<string>();
-    const mapData = get().mapData;
+    const { mapData, cities, battleType } = get();
 
-    for (let i = 0; i < UNIT_CONFIG.INITIAL_SPAWN_COUNT; i++) {
-      const isHero = i < UNIT_CONFIG.HERO_UNIT_COUNT;
-      const type = getRandomType();
-      const faction = getFactionByIndex(i);
-      const stats = BASE_STATS[type];
+    // ── 유효 스폰 타일 체크 ──────────────────────────────────────────────
+    const isValidSpawn = (lx: number, ly: number): boolean => {
+      if (lx < 0 || lx >= mapWidth || ly < 0 || ly >= mapHeight) return false;
+      if (usedTiles.has(`${lx},${ly}`)) return false;
+      if (!mapData) return true;
+      return !isSpawnBlockedTile(mapData[ly]?.[lx]);
+    };
 
+    // ── 거점 반경 4타일 내 유효 타일 풀 ─────────────────────────────────
+    const CITY_RADIUS = 4;
+    const getCityPool = (): { lx: number; ly: number }[] => {
+      const pool: { lx: number; ly: number }[] = [];
+      for (const city of cities) {
+        for (let dy = -CITY_RADIUS; dy <= CITY_RADIUS; dy++) {
+          for (let dx = -CITY_RADIUS; dx <= CITY_RADIUS; dx++) {
+            if (Math.abs(dx) + Math.abs(dy) > CITY_RADIUS) continue; // 다이아몬드 형태
+            const nx = city.x + dx;
+            const ny = city.y + dy;
+            const terrain = mapData?.[ny]?.[nx];
+            if (nx >= 0 && ny >= 0 && nx < mapWidth && ny < mapHeight && terrain !== undefined && !isSpawnBlockedTile(terrain)) {
+              pool.push({ lx: nx, ly: ny });
+            }
+          }
+        }
+      }
+      return pool;
+    };
+
+    // ── 맵 가장자리 20% 구간 유효 타일 풀 (PATH 우선) ────────────────────
+    const getEdgePool = (minX: number, maxX: number): { lx: number; ly: number }[] => {
+      if (!mapData) return [];
+      const pathTiles: { lx: number; ly: number }[] = [];
+      const otherTiles: { lx: number; ly: number }[] = [];
+      for (let ly = 0; ly < mapHeight; ly++) {
+        for (let lx = minX; lx <= maxX; lx++) {
+          if (isSpawnBlockedTile(mapData[ly]?.[lx])) continue;
+          if (mapData[ly]?.[lx] === TerrainType.PATH) pathTiles.push({ lx, ly });
+          else otherTiles.push({ lx, ly });
+        }
+      }
+      return pathTiles.length > 0 ? pathTiles : otherTiles;
+    };
+
+    const EDGE_X_PLAYER = Math.floor(mapWidth * 0.2);       // x ≤ 9
+    const EDGE_X_ENEMY  = Math.floor(mapWidth * 0.8);       // x ≥ 40
+
+    // 수비전: 아군→거점 주변, 적군→우측 가장자리
+    // 공격전: 아군→좌측 가장자리(PATH 우선), 적군→거점 주변
+    const playerPool = battleType === 'defensive'
+      ? getCityPool()
+      : getEdgePool(0, EDGE_X_PLAYER);
+
+    const enemyPool = battleType === 'defensive'
+      ? getEdgePool(EDGE_X_ENEMY, mapWidth - 1)
+      : getCityPool();
+
+    // ── 풀에서 랜덤 픽업 (이미 사용된 타일 제외) ─────────────────────────
+    const pickFrom = (
+      pool: { lx: number; ly: number }[],
+    ): { lx: number; ly: number } => {
+      const available = pool.filter(p => !usedTiles.has(`${p.lx},${p.ly}`));
+      if (available.length > 0) {
+        return available[Math.floor(Math.random() * available.length)];
+      }
+      // 풀 소진 시 fallback: 맵 전체 랜덤
       let lx = 0, ly = 0, attempts = 0;
       do {
         lx = Math.floor(Math.random() * mapWidth);
         ly = Math.floor(Math.random() * mapHeight);
         if (++attempts > 1000) break;
-      } while (
-        usedTiles.has(`${lx},${ly}`) ||
-        (mapData ? isSpawnBlockedTile(mapData[ly]?.[lx]) : false)
-      );
+      } while (!isValidSpawn(lx, ly));
+      return { lx, ly };
+    };
+
+    for (let i = 0; i < UNIT_CONFIG.INITIAL_SPAWN_COUNT; i++) {
+      const isHero   = i < UNIT_CONFIG.HERO_UNIT_COUNT;
+      const type     = getRandomType();
+      const faction  = getFactionByIndex(i);
+      const stats    = BASE_STATS[type];
+      const isPlayer = faction === 'western_empire';
+
+      const { lx, ly } = pickFrom(isPlayer ? playerPool : enemyPool);
       usedTiles.add(`${lx},${ly}`);
 
       const px = tileToPixel(lx);
       const py = tileToPixel(ly);
       newUnits[`unit-${i}`] = {
         id: `unit-${i}`,
-        factionId: faction,
-        unitType: type,
-        hp: stats.hp * (isHero ? 2 : 1),
-        maxHp: stats.hp * (isHero ? 2 : 1),
-        attack: stats.attack * (isHero ? 1.5 : 1),
-        defense: stats.defense,
-        speed: stats.speed,
+        factionId:   faction,
+        unitType:    type,
+        hp:          stats.hp     * (isHero ? 2   : 1),
+        maxHp:       stats.hp     * (isHero ? 2   : 1),
+        attack:      stats.attack * (isHero ? 1.5 : 1),
+        defense:     stats.defense,
+        speed:       stats.speed,
         attackRange: stats.attackRange,
-        state: 'IDLE',
-        hasActed: false,
+        state:       'IDLE',
+        hasActed:    false,
         logicalX: lx, logicalY: ly,
         x: px, y: py,
         targetX: px, targetY: py,
@@ -247,16 +334,22 @@ export const useGameStore = create<GameState>((set, get) => ({
   confirmMove: (lx, ly) => {
     const s = get();
     if (!s.selectedUnitId || !s.mapData) return;
-    if (!s.moveRangeTiles.has(`${lx},${ly}`)) return;
+    const unit = s.units[s.selectedUnitId];
+    if (!unit) return;
+
+    // 현재 유닛 위치인 경우: moveRangeTiles 체크 우회 (제자리 행동)
+    const isCurrentTile = unit.logicalX === lx && unit.logicalY === ly;
+    if (!isCurrentTile && !s.moveRangeTiles.has(`${lx},${ly}`)) return;
+
     let path = s.previewPath;
     if (!path.length || path[path.length - 1].lx !== lx || path[path.length - 1].ly !== ly) {
-      const unit = s.units[s.selectedUnitId];
-      if (!unit) return;
       const { friendlyTiles, enemyTiles } = buildTileSets(s.units, s.selectedUnitId);
-      path = findMovePath(
-        unit.logicalX, unit.logicalY, lx, ly, unit.speed,
-        s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
-      );
+      path = isCurrentTile
+        ? [{ lx, ly }]  // 제자리: 한 칸짜리 경로
+        : findMovePath(
+            unit.logicalX, unit.logicalY, lx, ly, unit.speed,
+            s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
+          );
     }
     set({ confirmedDestination: { lx, ly }, confirmedPath: path });
   },
