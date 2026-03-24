@@ -1,11 +1,27 @@
-import { useMemo, useState, memo, useEffect, useCallback, useRef } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { Delaunay } from 'd3-delaunay';
-import { generateProvinces, type MicroCell } from '../utils/provinceGenerator';
+import { generateProvinces } from '../utils/provinceGenerator';
 import { useAppStore } from '../store/appStore';
-import type { Province } from '../types/appTypes';
 import { FACTIONS } from '../constants/gameConfig';
-import { Stage, Container, Graphics as PixiGraphics, Text as PixiText } from '@pixi/react';
+import { Stage, Container, Graphics as PixiGraphics, Text as PixiText, Sprite } from '@pixi/react';
 import * as PIXI from 'pixi.js';
+
+// 지형 스프라이트 매니페스트 (public/assets/ui/terrain/ 기반)
+const TERRAIN_MANIFEST: Record<string, string[]> = {
+  mountain_normal:  ['mountain_normal_1.png','mountain_normal_2.png','mountain_normal_3.png','mountain_normal_4.png','mountain_normal_5.png'],
+  mountain_rugged:  ['mountain_rugged_1.png'],
+  mountain_gentle:  ['mountain_gentle_1.png'],
+  hill:             ['hill_1.png','hill_2.png'],
+  tree_conifer:     ['tree_conifer_1.png','tree_conifer_2.png','tree_conifer_3.png','tree_conifer_4.png','tree_conifer_5.png',
+                     'tree_conifer_6.png','tree_conifer_7.png','tree_conifer_8.png','tree_conifer_9.png','tree_conifer_10.png'],
+  tree_deciduous:   ['tree_deciduous_1.png','tree_deciduous_2.png','tree_deciduous_3.png','tree_deciduous_4.png','tree_deciduous_5.png','tree_deciduous_6.png'],
+  castle:           ['castle_1.png','castle_2.png'],
+  fortress:         ['fortress_1.png','fortress_2.png'],
+  town_large:       ['town_large_1.png'],
+  town:             ['town_1.png','town_2.png','town_3.png','town_4.png','town_5.png'],
+  village:          ['village_1.png','village_2.png','village_3.png'],
+  ocean:            ['ocean_1.png'],
+};
 
 // SVG를 파싱하여 WebGL이 그릴 숫자 쌍 배열을 얻는 극 초고속 함수
 function parseSvgPathToPolygon(pathStr: string): number[] {
@@ -20,196 +36,190 @@ function parseSvgPathToPolygon(pathStr: string): number[] {
   return polygon;
 }
 
-// 컬러 Hex 문자열을 Number 형식(0xRRGGBB)으로 변환
-function colorToHex(color: string): number {
-  if (color.startsWith('#')) return parseInt(color.slice(1), 16);
-  if (color === 'red') return 0xff0000;
-  if (color === 'yellow') return 0xffff00;
-  return 0xffffff;
+// RGB 컬러 블렌딩 보조 함수 (파치먼트 틴트 믹스 용도)
+function blendColors(c1: number, c2: number, ratio: number): number {
+  const r1 = (c1 >> 16) & 0xff, g1 = (c1 >> 8) & 0xff, b1 = c1 & 0xff;
+  const r2 = (c2 >> 16) & 0xff, g2 = (c2 >> 8) & 0xff, b2 = c2 & 0xff;
+  const r = Math.round(r1 + (r2 - r1) * ratio);
+  const g = Math.round(g1 + (g2 - g1) * ratio);
+  const b = Math.round(b1 + (b2 - b1) * ratio);
+  return (r << 16) | (g << 8) | b;
 }
 
-const COASTAL_COLOR = 0xaae6fa;
-const OCEAN_COLORS = [0x91daef, 0x7ecfe8, 0x6cc5e1, 0x5abab9, 0x6ebeeb]; // 바다 심도별 (가장 깊은 0x6ebeeb 포함)
+// 파치먼트(양피지) 기조 팔레트
+const PARCHMENT_BASE  = 0xcbbba4; // 기본 모래/파치먼트
+const PARCHMENT_DARK  = 0xa5967d; // 어두운 경계 느낌
+const COASTAL_COLOR   = 0xd4c5ae; // 얕은 해안선 (밝은 모래색)
+const OCEAN_COLORS    = [0xcbbba4, 0xbdad96, 0xb0a08a, 0xa3937e, 0xa3957f]; // 심도별 (심해 중간값 베이지)
+
 
 const SVG_W = 1440;
 const SVG_H = 820;
 
-type MapMode = 'faction' | 'terrain' | 'security' | 'resource';
-
-// --- PIXI 스타일 상수 ---
-const LABEL_TEXT_STYLE = new PIXI.TextStyle({
-  fontFamily: ['Pretendard', 'sans-serif'],
-  fontSize: 14,
-  fontWeight: 'bold',
-  fill: 0xffffff,
-  stroke: 0x000000,
-  strokeThickness: 3,
-  align: 'center',
-  dropShadow: true,
-  dropShadowAlpha: 0.6,
-  dropShadowBlur: 2,
-  dropShadowDistance: 2,
-});
-
-const CENTER_LABEL_STYLE = new PIXI.TextStyle({
-  ...LABEL_TEXT_STYLE,
-  fontSize: 22,
-});
+type MapMode = 'faction';
 
 export const StrategyMapScreen = () => {
-  const worldSeed = useAppStore(s => s.worldSeed);
-  const userFaction = useAppStore(s => s.playerFaction);
-  const factionResources = useAppStore(s => s.factionResources);
+  const worldSeed  = useAppStore(s => s.worldSeed);
 
-  const [mapMode, setMapMode] = useState<MapMode>('faction');
+  const [mapMode] = useState<MapMode>('faction');
 
   // 화면 크기
   const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
-
   useEffect(() => {
     const handleResize = () => setDimensions({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // --- 화면 줌/팬 핸들러 ---
-  const [scale, setScale] = useState(1.0);
-  // 처음 지도를 중앙쯤에 두기 위해 보정
-  const [position, setPosition] = useState({ x: (window.innerWidth - SVG_W) / 2, y: (window.innerHeight - SVG_H) / 2 });
-  const [isDraggingMap, setIsDraggingMap] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  // --- 카메라 Tween 상태 ---
+  // initialFitScale: 긴 폭 기준 100% 맞춤
+  const initialFitScale = typeof window !== 'undefined'
+    ? Math.max(window.innerWidth / SVG_W, window.innerHeight / SVG_H)
+    : 1.0;
 
+  const [scale, setScale]               = useState(initialFitScale);
+  const [targetScale, setTargetScale]   = useState(initialFitScale);
+  const [position, setPosition]         = useState(() => {
+    const s = initialFitScale;
+    return {
+      x: (window.innerWidth  - SVG_W * s) / 2,
+      y: (window.innerHeight - SVG_H * s) / 2,
+    };
+  });
+  const [targetPosition, setTargetPosition] = useState(() => {
+    const s = initialFitScale;
+    return {
+      x: (window.innerWidth  - SVG_W * s) / 2,
+      y: (window.innerHeight - SVG_H * s) / 2,
+    };
+  });
+  const [isDraggingMap, setIsDraggingMap] = useState(false);
+  const [dragStart, setDragStart]         = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // 화면 밖으로 튕겨나가지 않도록 좌표를 클램프(Clamp)하는 보조 함수
-  const getClampedPosition = (newX: number, newY: number, currentScale: number) => {
+  // 화면 밖으로 튕겨나가지 않도록 좌표를 클램핑하는 보조 함수
+  const getClampedPosition = useCallback((newX: number, newY: number, currentScale: number) => {
     const mapW = SVG_W * currentScale;
     const mapH = SVG_H * currentScale;
-
-    let cx = newX;
-    let cy = newY;
-
-    // 가로 스크롤 한계 (맵이 화면보다 넓을 때만 작동, 작으면 무조건 중앙)
-    if (mapW > dimensions.w) {
-      cx = Math.max(dimensions.w - mapW, Math.min(0, cx));
-    } else {
-      cx = (dimensions.w - mapW) / 2;
-    }
-
-    // 세로 스크롤 한계
-    if (mapH > dimensions.h) {
-      cy = Math.max(dimensions.h - mapH, Math.min(0, cy));
-    } else {
-      cy = (dimensions.h - mapH) / 2;
-    }
-
+    const { w, h } = dimensions;
+    const cx = mapW > w ? Math.max(w - mapW, Math.min(0, newX)) : (w - mapW) / 2;
+    const cy = mapH > h ? Math.max(h - mapH, Math.min(0, newY)) : (h - mapH) / 2;
     return { x: cx, y: cy };
-  };
+  }, [dimensions]);
 
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+  // Lerp Tweening 애니메이션 루프
+  useEffect(() => {
+    let frameId: number;
+    const LERP = 0.18;
+    const animate = () => {
+      if (!isDraggingMap) {
+        setScale(prev => {
+          const diff = targetScale - prev;
+          return Math.abs(diff) < 0.0005 ? targetScale : prev + diff * LERP;
+        });
+        setPosition(prev => {
+          const dx = targetPosition.x - prev.x;
+          const dy = targetPosition.y - prev.y;
+          if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) return targetPosition;
+          return getClampedPosition(prev.x + dx * LERP, prev.y + dy * LERP, scale);
+        });
+      }
+      frameId = requestAnimationFrame(animate);
+    };
+    frameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frameId);
+  }, [targetScale, targetPosition, isDraggingMap, scale, getClampedPosition]);
+
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const zoomIn = e.deltaY < 0;
     const factor = zoomIn ? 1.25 : 0.8;
 
-    // 화면 맞춤사이즈 이상으로(여백 생기지 않도록) 축소되는 것을 방지
+    // 긴 폭 기준 맞춤 스케일 이하로 축소되는 것을 방지
     const minScale = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
-    const newScale = Math.min(Math.max(scale * factor, minScale), 8);
+    const newTargetScale = Math.min(Math.max(targetScale * factor, minScale), 8);
 
     // 마우스 포인터를 향해 줌
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const cursorX = e.clientX - rect.left;
     const cursorY = e.clientY - rect.top;
-
-    // 현재 커서의 로컬 좌표
     const localX = (cursorX - position.x) / scale;
     const localY = (cursorY - position.y) / scale;
+    const newX = cursorX - localX * newTargetScale;
+    const newY = cursorY - localY * newTargetScale;
 
-    // 새로운 위치 계산
-    const newX = cursorX - localX * newScale;
-    const newY = cursorY - localY * newScale;
+    setTargetScale(newTargetScale);
+    setTargetPosition(getClampedPosition(newX, newY, newTargetScale));
+  }, [targetScale, position, scale, dimensions, getClampedPosition]);
 
-    setScale(newScale);
-    setPosition(getClampedPosition(newX, newY, newScale));
-  };
+  // 선택/호버 state는 event handler에서 참조하므로 먼저 선언
+  const [selectedProvinceId, setSelectedProvinceId] = useState<string | null>(null);
+  const [hoveredProvinceId, setHoveredProvinceId]   = useState<string | null>(null);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     setIsDraggingMap(true);
     setDragStart({ x: e.clientX, y: e.clientY });
     e.currentTarget.setPointerCapture(e.pointerId);
-  };
+  }, []);
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    // 1. 드래그 이동 (영역 밖 클램핑 적용)
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (isDraggingMap) {
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
-      setPosition(prev => getClampedPosition(prev.x + dx, prev.y + dy, scale));
+      const newPos = getClampedPosition(position.x + dx, position.y + dy, scale);
+      setPosition(newPos);
+      setTargetPosition(newPos);
       setDragStart({ x: e.clientX, y: e.clientY });
     }
 
-    // 2. 호버 탐지 (Delaunay Raycasting, O(1) 수준 초고속)
+    // 호버 탐지 (Delaunay Raycasting)
     if (containerRef.current && delaunayFinder && parsedCells) {
       const rect = containerRef.current.getBoundingClientRect();
       const localX = (e.clientX - rect.left - position.x) / scale;
-      const localY = (e.clientY - rect.top - position.y) / scale;
-
-      // 마우스 좌표와 가장 가까운 셀 반환 (만도 초고속 색인)
+      const localY = (e.clientY - rect.top  - position.y) / scale;
       const cellIndex = delaunayFinder.find(localX, localY);
       if (cellIndex !== undefined && cellIndex >= 0 && cellIndex < parsedCells.length) {
         const pCell = parsedCells[cellIndex];
-
-        // 거리가 너무 먼 영역 밖의 호버 방지 (선택)
-        const dx = pCell.cx - localX;
-        const dy = pCell.cy - localY;
-        if (dx * dx + dy * dy > 2000) {
+        const dx2 = pCell.cx - localX, dy2 = pCell.cy - localY;
+        if (dx2 * dx2 + dy2 * dy2 > 2000) {
           if (hoveredProvinceId !== null) setHoveredProvinceId(null);
           return;
         }
-
         const provId = pCell.provinceId;
-        if (provId !== hoveredProvinceId && provId) {
-          setHoveredProvinceId(provId);
-        } else if (!provId && hoveredProvinceId !== null) {
-          setHoveredProvinceId(null);
-        }
+        if (provId !== hoveredProvinceId && provId) setHoveredProvinceId(provId);
+        else if (!provId && hoveredProvinceId !== null) setHoveredProvinceId(null);
       }
     }
-  };
+  }, [isDraggingMap, dragStart, position, scale, getClampedPosition]);
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     setIsDraggingMap(false);
     e.currentTarget.releasePointerCapture(e.pointerId);
-  };
+  }, []);
 
-  const handleCanvasClick = (e: React.MouseEvent) => {
+  const handleCanvasClick = useCallback((e: React.MouseEvent) => {
     if (isDraggingMap) return;
     if (hoveredProvinceId && hoveredProvinceId !== selectedProvinceId) {
       setSelectedProvinceId(hoveredProvinceId);
     } else if (hoveredProvinceId === selectedProvinceId) {
       setSelectedProvinceId(null);
     }
-  };
-
+  }, [isDraggingMap, hoveredProvinceId, selectedProvinceId]);
 
   // --- 데이터 생성 및 캐싱 ---
-  const { allCells, boundaryEdges, oceanDepth, terrainIcons, rivers, centers, provinces, parsedCells, delaunayFinder, coastlineEdges } = useMemo(() => {
-    if (!worldSeed) return { allCells: [], boundaryEdges: [], oceanDepth: [], terrainIcons: [], rivers: [], centers: [], provinces: {}, parsedCells: null, delaunayFinder: null, coastlineEdges: [] };
+  const { boundaryEdges, terrainIcons, rivers, centers, factionCenters, provinces, parsedCells, delaunayFinder, coastlineEdges } = useMemo(() => {
+    if (!worldSeed) return { allCells: [], boundaryEdges: [], oceanDepth: [], terrainIcons: [], rivers: [], centers: [], factionCenters: [], provinces: {}, parsedCells: null, delaunayFinder: null, coastlineEdges: [] };
     const result = generateProvinces(SVG_W, SVG_H, worldSeed);
 
-    // 각 셀의 중심을 계산하여 중심 라벨 위치 도출
     const grouped: Record<string, { sx: number; sy: number; n: number; isCap: boolean; name: string }> = {};
-    const parsedCache: { polygon: number[]; provinceId: string | null; isOcean: boolean, depth: number, faction: string | null, cx: number, cy: number }[] = [];
+    const parsedCache: { polygon: number[]; provinceId: string | null; isOcean: boolean; depth: number; faction: string | null; cx: number; cy: number }[] = [];
     const cellCenters: [number, number][] = [];
 
     for (let i = 0; i < result.allCells.length; i++) {
       const c = result.allCells[i];
       cellCenters.push([c.cx, c.cy]);
-
-      // c.province 속성이 없을 수 있으므로 result.provinces 맵 사용
       const provObj = c.provinceId ? result.provinces[c.provinceId] : null;
-
-      // 문자열 -> 숫자로 선제 파싱
       parsedCache.push({
         polygon: parseSvgPathToPolygon(c.path),
         provinceId: c.provinceId,
@@ -217,9 +227,8 @@ export const StrategyMapScreen = () => {
         depth: Math.max(0, Math.min(4, result.oceanDepth[i])),
         faction: provObj?.owner ?? null,
         cx: c.cx,
-        cy: c.cy
+        cy: c.cy,
       });
-
       if (!c.provinceId || !provObj) continue;
       if (!grouped[c.provinceId]) {
         grouped[c.provinceId] = { sx: 0, sy: 0, n: 0, isCap: provObj.isCapital, name: provObj.name };
@@ -237,9 +246,61 @@ export const StrategyMapScreen = () => {
       y: grouped[id].sy / grouped[id].n,
     }));
 
-    // 초고속 호버링 탐색 트리 생성
-    const hitFinder = Delaunay.from(cellCenters);
+    // 세력별 셀 목록 수집
+    const factionCells: Record<string, Array<{ cx: number; cy: number }>> = {};
+    for (let i = 0; i < result.allCells.length; i++) {
+      const c = result.allCells[i];
+      if (c.isOcean || !c.provinceId) continue;
+      const prov = result.provinces[c.provinceId];
+      if (!prov || !FACTIONS[prov.owner]) continue;
+      if (!factionCells[prov.owner]) factionCells[prov.owner] = [];
+      factionCells[prov.owner].push({ cx: c.cx, cy: c.cy });
+    }
 
+    // 세력별 가장 큰 연결 클러스터 중심 계산 (바다 건너 영토 제외)
+    // 25px 그리드로 버킷화 → BFS로 연결 컴포넌트 탐색 → 최대 클러스터 사용
+    const GRID = 25;
+    const factionCenters = Object.entries(factionCells)
+      .filter(([id]) => FACTIONS[id])
+      .map(([id, cells]) => {
+        // 그리드 키 → 셀 인덱스 목록
+        const gridMap = new Map<string, number[]>();
+        for (let i = 0; i < cells.length; i++) {
+          const key = `${Math.round(cells[i].cx / GRID)},${Math.round(cells[i].cy / GRID)}`;
+          if (!gridMap.has(key)) gridMap.set(key, []);
+          gridMap.get(key)!.push(i);
+        }
+
+        const visited = new Set<string>();
+        let bestCluster: { cx: number; cy: number }[] = cells;
+        let bestSize = 0;
+
+        for (const startKey of gridMap.keys()) {
+          if (visited.has(startKey)) continue;
+          const clusterKeys: string[] = [];
+          const queue = [startKey];
+          visited.add(startKey);
+          let qi = 0;
+          while (qi < queue.length) {
+            const k = queue[qi++];
+            clusterKeys.push(k);
+            const [gx, gy] = k.split(',').map(Number);
+            for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+              const nk = `${gx + dx},${gy + dy}`;
+              if (gridMap.has(nk) && !visited.has(nk)) { visited.add(nk); queue.push(nk); }
+            }
+          }
+          const clusterCells = clusterKeys.flatMap(k => (gridMap.get(k) ?? []).map(i => cells[i]));
+          if (clusterCells.length > bestSize) { bestSize = clusterCells.length; bestCluster = clusterCells; }
+        }
+
+        const sx = bestCluster.reduce((a, c) => a + c.cx, 0);
+        const sy = bestCluster.reduce((a, c) => a + c.cy, 0);
+        return { id, name: FACTIONS[id].name, x: sx / bestCluster.length, y: sy / bestCluster.length };
+      });
+
+
+    const hitFinder = Delaunay.from(cellCenters);
     return {
       allCells: result.allCells,
       boundaryEdges: result.boundaryEdges,
@@ -248,82 +309,55 @@ export const StrategyMapScreen = () => {
       rivers: result.rivers,
       provinces: result.provinces,
       centers,
+      factionCenters,
       parsedCells: parsedCache,
       delaunayFinder: hitFinder,
       coastlineEdges: result.coastlineEdges,
     };
   }, [worldSeed]);
 
-  const [selectedProvinceId, setSelectedProvinceId] = useState<string | null>(null);
-  const [hoveredProvinceId, setHoveredProvinceId] = useState<string | null>(null);
+  const selectedProvince = selectedProvinceId ? (provinces as any)[selectedProvinceId] : null;
 
-  const selectedProvince = selectedProvinceId ? provinces[selectedProvinceId] : null;
 
   // --- PIXI 커스텀 렌더링 파이프라인 ---
-  // 1. 단일 마그마 코어 드로우 콜 (지형, 바다) - `parsedCells` 캐싱 기반
   const drawMapBase = useCallback((g: PIXI.Graphics) => {
     if (!parsedCells) return;
     g.clear();
 
     const getFillColor = (idx: number, cell: typeof parsedCells[0]): number => {
-      // 바다: BFS 거리 기반 (육지에 가까울수록 1, 멀어질수록 큰 값)
       if (cell.isOcean) {
-        // BFS 큐가 닿지 않은 극외곽 심해는 가장 짙은 색으로 통일
-        if (cell.depth === 0) return 0x6ebeeb;
-
-        // 육지와 인접한 1단계 얕은 해안선
+        if (cell.depth === 0) return OCEAN_COLORS[4];
         if (cell.depth === 1) return COASTAL_COLOR;
-
-        // 거리가 멀어질수록 심해 배열(OCEAN_COLORS)을 따라 점진적으로 어두워짐
-        const colorIdx = Math.min(cell.depth - 2, OCEAN_COLORS.length - 1);
-        return OCEAN_COLORS[colorIdx];
+        return OCEAN_COLORS[Math.min(cell.depth - 2, OCEAN_COLORS.length - 1)];
       }
-      // Faction 모드
-      if (mapMode === 'faction') {
-        // 기존 FACTION_COLORS 하드코딩이 아닌 실제 게임 config 데이터 참조
-        if (cell.faction && FACTIONS[cell.faction]) {
-          return FACTIONS[cell.faction].color;
-        }
-        return 0xD1D5DB; // 회색 (미할당 육지)
+      if (mapMode === 'faction' && cell.faction && FACTIONS[cell.faction]) {
+        // 세력 색 × PARCHMENT_DARK(어두운 파치먼트)로 혼합 → 더 짙고 어두운 영토 색
+        return blendColors(FACTIONS[cell.faction].color, PARCHMENT_DARK, 0.53);
       }
-      return 0x9CA3AF; // 모든 모드 Fallback
+      return PARCHMENT_BASE;
     };
 
-    // 거대한 폴리곤들 루프 (만 사천 번 그려도 Pixi 내부에선 버텍스 버퍼 연산으로 하나로 통합됨)
     for (let i = 0; i < parsedCells.length; i++) {
       const c = parsedCells[i];
       const color = getFillColor(i, c);
-
-      // 모든 마이크로셀 윤곽선 제거 (깔끔한 솔리드 렌더링)
       g.lineStyle(0);
-
-      if (c.isOcean) {
-        g.beginFill(color, 1);
-      } else {
-        // 육지는 세력 모드 시 약간 투명하게 하여 지형이 은은하게 비치도록
-        g.beginFill(color, mapMode === 'faction' && (!c.faction) ? 0.3 : 0.85);
-      }
-
+      g.beginFill(color, c.isOcean ? 1 : 0.92);
       g.drawPolygon(c.polygon);
       g.endFill();
     }
   }, [parsedCells, mapMode]);
 
-  // 1-5. 대륙 해안선 (하이라이트를 덮기 위해 별도 레이어로 분리)
   const drawCoastlines = useCallback((g: PIXI.Graphics) => {
     g.clear();
     if (coastlineEdges && coastlineEdges.length > 0) {
-      // 투명도 없는 굵고 선명한 짙은 고동색(Dark Brown) 잉크 스타일 적용
       g.lineStyle({ width: 1.5, color: 0x4a3b32, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
-      for (let i = 0; i < coastlineEdges.length; i++) {
-        const edge = coastlineEdges[i];
+      for (const edge of coastlineEdges) {
         g.moveTo(edge.x1, edge.y1);
         g.lineTo(edge.x2, edge.y2);
       }
     }
   }, [coastlineEdges]);
 
-  // 2. 강 시스템
   const drawRivers = useCallback((g: PIXI.Graphics) => {
     if (!rivers) return;
     g.clear();
@@ -335,57 +369,74 @@ export const StrategyMapScreen = () => {
     });
   }, [rivers]);
 
-  // 3. 지형/세력 경계선 시스템
   const drawBoundaries = useCallback((g: PIXI.Graphics) => {
     if (!boundaryEdges) return;
     g.clear();
     boundaryEdges.forEach(e => {
-      const isFact = e.isFactionBoundary;
-      if (isFact) {
-        // 국가간 경계선: 완전 불투명(1.0), 두께 1, 어두운 선(0x4a3b32), 부드러운 Miter/Cap (라운드)
-        g.lineStyle({ width: 1, color: 0x4a3b32, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
+      if (e.isFactionBoundary) {
+        g.lineStyle({ width: 1.5, color: 0x3a2d22, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       } else {
-        // 내부 일반 영지 경계선: 얇고 투명한 검은색 라인
-        g.lineStyle({ width: 1, color: 0x000000, alpha: 0.15, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
+        g.lineStyle({ width: 1, color: 0x000000, alpha: 0.12, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       }
       g.moveTo(e.x1, e.y1);
       g.lineTo(e.x2, e.y2);
     });
   }, [boundaryEdges]);
 
-  // 4. 호버 및 선택 영역 하이라이트 레이어 (O(1) 속도 최적화, 해당 폴리곤만 덮어씀)
   const drawHighlights = useCallback((g: PIXI.Graphics) => {
     g.clear();
     if (!parsedCells) return;
-
     const drawTargetProv = (targetId: string, color: number, alpha: number, lineWidth: number) => {
       g.lineStyle(lineWidth, color, alpha);
-      g.beginFill(Math.min(color + 0x333333, 0xffffff), alpha * 0.4); // 약간 밝게 칠함
-
-      // 해당 ProvinceID를 가진 셀들을 모두 덧그린다.
+      g.beginFill(Math.min(color + 0x333333, 0xffffff), alpha * 0.4);
       for (let i = 0; i < parsedCells.length; i++) {
-        if (parsedCells[i].provinceId === targetId) {
-          g.drawPolygon(parsedCells[i].polygon);
-        }
+        if (parsedCells[i].provinceId === targetId) g.drawPolygon(parsedCells[i].polygon);
       }
       g.endFill();
     };
-
     if (hoveredProvinceId && hoveredProvinceId !== selectedProvinceId) {
-      drawTargetProv(hoveredProvinceId, 0xffffff, 0.4, 0); // 얇은 흰색 필터
+      drawTargetProv(hoveredProvinceId, 0xffffff, 0.4, 0);
     }
-
     if (selectedProvinceId) {
-      drawTargetProv(selectedProvinceId, 0xfcd34d, 0.6, 4); // 굵은 노란색 외곽선
+      drawTargetProv(selectedProvinceId, 0xfcd34d, 0.6, 4);
     }
   }, [parsedCells, hoveredProvinceId, selectedProvinceId]);
 
-  // 5. 프레임 테두리 (Border)
   const drawBorders = useCallback((g: PIXI.Graphics) => {
     g.clear();
-    g.lineStyle(6, 0x1e293b, 1);
+    g.lineStyle(6, 0x2c1e14, 1);
     g.drawRect(0, 0, SVG_W, SVG_H);
   }, []);
+
+  // 맵 영역 바깥 마스킹 레이어 (Container 밖 화면 좌표 기준)
+  const drawMask = useCallback((g: PIXI.Graphics) => {
+    g.clear();
+    const mapLeft   = position.x;
+    const mapTop    = position.y;
+    const mapRight  = position.x + SVG_W * scale;
+    const mapBottom = position.y + SVG_H * scale;
+    const W = dimensions.w;
+    const H = dimensions.h;
+    g.beginFill(0x000000, 1);
+    if (mapLeft > 0)   g.drawRect(0, 0, mapLeft, H);
+    if (mapRight < W)  g.drawRect(mapRight, 0, W - mapRight, H);
+    if (mapTop > 0)    g.drawRect(mapLeft, 0, SVG_W * scale, mapTop);
+    if (mapBottom < H) g.drawRect(mapLeft, mapBottom, SVG_W * scale, H - mapBottom);
+    g.endFill();
+  }, [position, scale, dimensions]);
+
+  // --- LOD 계산 ---
+  // LOD_SWITCH: 이 배율에서 세력명(lod1) ↔ 지역명(lod2) 교차
+  // fitScale = 화면에 맵이 꽉 들어차는 최소 배율
+  const fitScale    = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
+  const LOD_SWITCH  = fitScale * 2.0;  // fitScale의 2배 확대 시점에서 교차
+  const FADE_HALF   = fitScale * 0.4;  // 교차 전후 ±0.4배 구간에서 페이드
+
+  // lod1Alpha: fitScale에서 1.0, LOD_SWITCH+FADE_HALF 이상에서 0.0
+  const lod1Alpha = Math.max(0, Math.min(1, (LOD_SWITCH + FADE_HALF - scale) / (FADE_HALF * 2)));
+  // lod2Alpha: LOD_SWITCH-FADE_HALF 이하에서 0.0, LOD_SWITCH+FADE_HALF 이상에서 1.0
+  const lod2Alpha = Math.max(0, Math.min(1, (scale - (LOD_SWITCH - FADE_HALF)) / (FADE_HALF * 2)));
+
 
 
   return (
@@ -394,29 +445,18 @@ export const StrategyMapScreen = () => {
         <h1 className="smap-title font-title text-2xl font-bold text-white drop-shadow-md">
           지방 행정 <span className="text-gray-300 ml-2 text-sm italic opacity-80">- WebGL Engine</span>
         </h1>
-        {/* 우측 중앙 상단: 맵 모드 토글 바 */}
-        <div className="flex bg-slate-800/80 p-1 rounded-md mt-2 ml-4 relative z-10 shadow-lg pointer-events-auto">
-          {(['faction'] as MapMode[]).map(m => (
-            <button key={m} onClick={() => setMapMode(m)}
-              className={`px-3 py-1 text-sm font-bold rounded transition-colors mr-1 ${mapMode === m ? 'bg-amber-600 text-white shadow-inner' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-600/70'
-                }`}
-            >
-              {m === 'faction' ? '세력권' : m === 'terrain' ? '지형도' : m === 'security' ? '치안도' : '자원도'}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* 지도 (순수 PIXI WebGL 캔버스 렌더러 지원) */}
+      {/* 지도 (순수 PIXI WebGL 캔버스 렌더러) */}
       <div
         ref={containerRef}
         className="smap-map-area"
         style={{
           position: 'relative',
           overflow: 'hidden',
-          backgroundColor: '#0a192f', // 배경 빈공간 색
+          backgroundColor: '#c2ae95', // 파치먼트 외곽 배경
           cursor: isDraggingMap ? 'grabbing' : 'grab',
-          touchAction: 'none', // 크롬 터치 스크롤 방지
+          touchAction: 'none',
           width: '100%',
           height: '100vh',
         }}
@@ -430,59 +470,104 @@ export const StrategyMapScreen = () => {
           width={dimensions.w}
           height={dimensions.h}
           options={{
-            backgroundColor: 0x6ebeeb, // 맵 외곽 넓은 심해를 은은한 심연의 파스텔톤으로 변경
-            resolution: typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2, // 해상도 하한선을 2배율(레티나)로 강제 지정하여 글씨 깨짐 방지
+            backgroundColor: 0xa3957f, // 맵 외곽 심해 (중간 베이지)
+            resolution: typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2,
             autoDensity: true,
             antialias: false,
           }}
-          onWheel={handleWheel}
           style={{ width: '100%', height: '100%', display: 'block' }}
         >
-          {/* Main Transformation Container */}
-          {/* 이벤트 감지를 자체적으로 하진 않고 div 영역에 위임하여 처리 */}
+          {/* Main Transformation Container (지도 맵 좌표계) */}
           <Container scale={scale} position={[position.x, position.y]}>
-
-            {/* 1. Base Map (지형 및 바다 데이터 일괄 그래픽스) */}
+            {/* 1. Base Map */}
             <PixiGraphics draw={drawMapBase} />
-
             {/* 2. Rivers */}
             <PixiGraphics draw={drawRivers} />
-
             {/* 3. Boundaries */}
             <PixiGraphics draw={drawBoundaries} />
-
-            {/* 3. 상호작용 하이라이트 오버레이 (Hover, Select) */}
+            {/* 4. Highlights */}
             <PixiGraphics draw={drawHighlights} />
-
-            {/* 4. 대륙 해안선 (강조선이 하이라이트보다 위에 오도록(z-index) 가장 나중에 그리기) */}
+            {/* 5. Coastlines (최상단 레이어로 하이라이트를 덮어야 함) */}
             <PixiGraphics draw={drawCoastlines} />
 
-            {/* 5. Terrain Icons (라벨용 텍스트 대체 / 추후 스프라이트 교체 가능) */}
-            {terrainIcons.map((ti, idx) => (
-              <PixiText
+
+            <PixiGraphics draw={drawBorders} />
+          </Container>
+
+          {/* 5. Terrain Sprites — Container 밖, Stage 안 (screen 좌표계)
+              위치: 맵 좌표 → 화면 좌표 직접 변환하여 줌/팬 추적, 크기는 항상 고정 */}
+          {terrainIcons.map((ti, idx) => {
+            const variants: string[] | undefined =
+              ti.type === 'peak'     ? TERRAIN_MANIFEST.mountain_rugged :
+              ti.type === 'mountain' ? TERRAIN_MANIFEST.mountain_normal  :
+              /* forest */             TERRAIN_MANIFEST.tree_conifer;
+            if (!variants || variants.length === 0) return null;
+
+            const variantFile = variants[Math.floor((ti.x * 7 + ti.y * 13) % variants.length)];
+            const spriteSrc = `/assets/ui/terrain/${variantFile}`;
+
+            // 맵 좌표 → 화면 좌표 변환 (Container transform 없이 직접)
+            const screenX = position.x + ti.x * scale;
+            const screenY = position.y + ti.y * scale;
+
+            // 화면 밖 컬링
+            const displaySize = Math.min(Math.max(ti.s, 8), 18);
+            if (screenX < -displaySize * 2 || screenX > dimensions.w + displaySize * 2) return null;
+            if (screenY < -displaySize * 2 || screenY > dimensions.h + displaySize * 2) return null;
+
+            // 화면 고정 크기 스케일 (Container 스케일과 완전히 분리)
+            const spriteScale = displaySize / 64;
+            return (
+              <Sprite
                 key={`ti-${idx}`}
-                text={ti.type === 'peak' ? '⛰️' : ti.type === 'mountain' ? '⛰️' : '🌲'}
-                x={ti.x}
-                y={ti.y}
+                image={spriteSrc}
+                x={screenX}
+                y={screenY}
                 anchor={0.5}
+                scale={{ x: spriteScale, y: spriteScale }}
+                blendMode={PIXI.BLEND_MODES.MULTIPLY}
+              />
+            );
+          })}
+
+          {/* 6. LOD 1: 줌아웃 시 국가(세력) 이름 — Terrain Sprites 위 레이어 */}
+          {lod1Alpha > 0 && factionCenters.map((fc: any) => {
+            const sx = position.x + fc.x * scale;
+            const sy = position.y + fc.y * scale;
+            if (sx < -120 || sx > dimensions.w + 120) return null;
+            if (sy < -60  || sy > dimensions.h + 60)  return null;
+            return (
+              <PixiText
+                key={`fc-${fc.id}-lod1`}
+                text={fc.name}
+                x={sx}
+                y={sy}
+                anchor={0.5}
+                alpha={lod1Alpha}
                 style={new PIXI.TextStyle({
-                  fontSize: Math.max(ti.s * 0.8, 10), // 지형 아이콘(텍스트) 크게 나오는 것 방지
-                  fill: ti.type === 'forest' ? 0x22c55e : 0xd1d5db,
-                  dropShadow: true, dropShadowAlpha: 0.8, dropShadowDistance: 1.5
+                  fontFamily: 'NanumBarunGothic, sans-serif',
+                  fontSize: 22,
+                  fontWeight: '900',
+                  fill: 0xffffff,
+                  dropShadow: true, dropShadowColor: 0x2c1e14, dropShadowDistance: 2, dropShadowAlpha: 1,
                 })}
               />
-            ))}
+            );
+          })}
 
-            {/* 6. Text Labels */}
-            {centers.map(lg => (
-              <Container key={`lb-${lg.id}`} position={[lg.x, lg.y]}>
+          {/* 7. LOD 2: 줌인 시 영지/마을 명칭 — Terrain Sprites 위 레이어 */}
+          {lod2Alpha > 0 && centers.map(lg => {
+            const sx = position.x + lg.x * scale;
+            const sy = position.y + lg.y * scale;
+            if (sx < -120 || sx > dimensions.w + 120) return null;
+            if (sy < -60  || sy > dimensions.h + 60)  return null;
+            return (
+              <Container key={`lb-${lg.id}`} position={[sx, sy]} alpha={lod2Alpha}>
                 {lg.isCap && (
                   <PixiGraphics draw={(g) => {
                     g.clear();
-                    // 자가 심볼 그리기
-                    g.beginFill(0xec4899); // 핑크
+                    g.beginFill(0xec4899);
                     g.lineStyle(1.5, 0xffffff);
-                    // 간이 크라운 아이콘
                     g.drawPolygon([-8, 6, -8, -2, -5, -5, -2, -2, 0, 1, 2, -2, 5, -5, 8, -2, 8, 6]);
                     g.endFill();
                     g.beginFill(0xfbbf24);
@@ -495,16 +580,24 @@ export const StrategyMapScreen = () => {
                   x={0}
                   y={0}
                   anchor={0.5}
-                  style={lg.isCap ? CENTER_LABEL_STYLE : LABEL_TEXT_STYLE}
+                  style={new PIXI.TextStyle({
+                    fontSize: lg.isCap ? 15 : 12,
+                    fontWeight: lg.isCap ? '900' : '700',
+                    fill: 0xffffff,
+                    stroke: 0x2c1e14,
+                    strokeThickness: 3,
+                    dropShadow: true, dropShadowColor: 0x2c1e14, dropShadowAlpha: 0.8, dropShadowBlur: 2, dropShadowDistance: 1,
+                  })}
                 />
               </Container>
-            ))}
+            );
+          })}
 
-            <PixiGraphics draw={drawBorders} />
-          </Container>
+          {/* 맵 외곽 블랙 마스킹 */}
+          <PixiGraphics draw={drawMask} />
         </Stage>
 
-        {/* Clicks을 탐지하는 투명 레이어 (Pixi 위에 배치) React 이벤트 버블링 용이 */}
+        {/* 클릭 감지 투명 레이어 */}
         <div
           className="absolute inset-0 z-0 pointer-events-auto"
           onClick={handleCanvasClick}
@@ -522,28 +615,21 @@ export const StrategyMapScreen = () => {
               <div className="text-sm font-semibold text-slate-400 mt-1">{FACTIONS[selectedProvince.owner]?.name || '중립 영토'}</div>
             </div>
             {selectedProvince.isCapital && (
-              <div className="bg-red-900/80 text-red-200 text-xs px-2 py-1 rounded font-bold border border-red-700/50 shadow-sm">
-                세력 수도
-              </div>
+              <div className="bg-red-900/80 text-red-200 text-xs px-2 py-1 rounded font-bold border border-red-700/50 shadow-sm">세력 수도</div>
             )}
-            <button onClick={() => setSelectedProvinceId(null)} className="text-slate-400 hover:text-white transition-colors bg-slate-800 hover:bg-slate-700 px-2 rounded-sm border border-slate-600">
-              ✕
-            </button>
+            <button onClick={() => setSelectedProvinceId(null)} className="text-slate-400 hover:text-white transition-colors bg-slate-800 hover:bg-slate-700 px-2 rounded-sm border border-slate-600">✕</button>
           </div>
 
           <div className="space-y-4 text-sm mt-2 font-mono">
-            {/* 스탯 표시 */}
             <div className="grid grid-cols-2 gap-3 bg-slate-800/50 p-3 rounded border border-slate-700">
               <div><span className="text-slate-500 text-xs block mb-1">치안도</span><span className="font-bold text-emerald-400">{selectedProvince.security}%</span></div>
               <div><span className="text-slate-500 text-xs block mb-1">지배력</span><span className="font-bold text-blue-400">안정</span></div>
             </div>
-
             <div className="space-y-2 pt-2 border-t border-slate-700/50">
               <div className="flex justify-between"><span className="text-slate-400 font-bold">턴 당 금:</span><span className="text-yellow-400 font-bold">+{selectedProvince.baseGoldProduction}</span></div>
               <div className="flex justify-between"><span className="text-slate-400 font-bold">턴 당 군량:</span><span className="text-orange-400 font-bold">+{selectedProvince.baseFoodProduction}</span></div>
               <div className="flex justify-between"><span className="text-slate-400 font-bold">기본 징병력:</span><span className="text-blue-400 font-bold">{selectedProvince.baseRecruitment}</span></div>
             </div>
-
             <button className="w-full mt-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-500 text-white rounded font-bold transition-colors shadow-inner flex items-center justify-center gap-2">
               <span className="text-amber-500 drop-shadow-md">⚔️</span> 관리 명령 하달
             </button>
@@ -555,7 +641,6 @@ export const StrategyMapScreen = () => {
       <button className="absolute bottom-6 right-6 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold border-2 border-slate-600 shadow-xl z-30 smap-btn-anim transition-all">
         전략 맵 닫기
       </button>
-
     </div>
   );
 };

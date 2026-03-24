@@ -1,0 +1,65 @@
+{
+  "mountain_normal": [
+    "mountain_normal_1.png",
+    "mountain_normal_2.png",
+    "mountain_normal_3.png",
+    "mountain_normal_4.png",
+    "mountain_normal_5.png"
+  ],
+  "mountain_rugged": [
+    "mountain_rugged_1.png"
+  ],
+  "mountain_gentle": [
+    "mountain_gentle_1.png"
+  ],
+  "hill": [
+    "hill_1.png",
+    "hill_2.png"
+  ],
+  "tree_conifer": [
+    "tree_conifer_1.png",
+    "tree_conifer_2.png",
+    "tree_conifer_3.png",
+    "tree_conifer_4.png",
+    "tree_conifer_5.png",
+    "tree_conifer_6.png",
+    "tree_conifer_7.png",
+    "tree_conifer_8.png",
+    "tree_conifer_9.png",
+    "tree_conifer_10.png"
+  ],
+  "tree_deciduous": [
+    "tree_deciduous_1.png",
+    "tree_deciduous_2.png",
+    "tree_deciduous_3.png",
+    "tree_deciduous_4.png",
+    "tree_deciduous_5.png",
+    "tree_deciduous_6.png"
+  ],
+  "castle": [
+    "castle_1.png",
+    "castle_2.png"
+  ],
+  "fortress": [
+    "fortress_1.png",
+    "fortress_2.png"
+  ],
+  "town_large": [
+    "town_large_1.png"
+  ],
+  "town": [
+    "town_1.png",
+    "town_2.png",
+    "town_3.png",
+    "town_4.png",
+    "town_5.png"
+  ],
+  "village": [
+    "village_1.png",
+    "village_2.png",
+    "village_3.png"
+  ],
+  "ocean": [
+    "ocean_1.png"
+  ]
+}
