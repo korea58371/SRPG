@@ -4,10 +4,12 @@
 
 import { create } from 'zustand';
 import type {
-  StrategyState, AppScreen, BattleOutcome, DiplomacyRel,
+  StrategyState, AppScreen, BattleOutcome, DiplomacyRel, FactionResource, GlobalHero
 } from '../types/appTypes';
+import type { FactionId } from '../types/gameTypes';
 import { generateProvinces } from '../utils/provinceGenerator';
 import { PLAYER_FACTION, FACTIONS } from '../constants/gameConfig';
+import { processDomesticTurn } from '../utils/domesticLogic';
 
 const WIN_RATIO = 0.7; // 70% 점령 시 굿엔딩
 
@@ -28,6 +30,8 @@ function checkVictory(provinces: StrategyState['provinces']): 'good' | 'bad' | n
 export const useAppStore = create<StrategyState>((set, get) => ({
   screen: 'TITLE',
   provinces: {},
+  globalHeroes: {},
+  factionResources: {},
   strategyTurn: 1,
   selectedProvinceId: null,
   pendingBattle: null,
@@ -44,13 +48,42 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     const seed = Date.now();
     const { provinces } = generateProvinces(900, 560, seed);
     const diplomacyRelations: Record<string, DiplomacyRel> = {};
-    // 모든 타 세력과의 기본 관계를 'war' 로 설정 (군웅할거 시대)
+    const factionResources: Record<FactionId, FactionResource> = {};
+    
+    // 모든 타 세력과의 기본 관계를 'war' 로 설정 (군웅할거 시대) 및 기본 자원 할당
     Object.keys(FACTIONS).forEach(fId => {
       if (fId !== PLAYER_FACTION) diplomacyRelations[fId] = 'war';
+      factionResources[fId] = { gold: 1000, food: 2000, manpower: 500 };
     });
+
+    const globalHeroes: Record<string, GlobalHero> = {};
+    const playerCapital = Object.values(provinces).find(p => p.owner === PLAYER_FACTION && p.isCapital);
+    
+    // 테스트용 초기 영웅 추가
+    if (playerCapital) {
+      globalHeroes['hero-orc'] = {
+        id: 'hero-orc',
+        name: '오크 대족장',
+        factionId: PLAYER_FACTION,
+        locationProvinceId: playerCapital.id,
+        raceEffects: { recruitmentBonus: 30, foodConsumptionMultiplier: 1.5, securityBonus: -10, productionBonus: 0 },
+        classEffects: { recruitmentBonus: 10, foodConsumptionMultiplier: 1.0, securityBonus: -5, productionBonus: -5 }
+      };
+      globalHeroes['hero-elf'] = {
+        id: 'hero-elf',
+        name: '엘프 대마법사',
+        factionId: PLAYER_FACTION,
+        locationProvinceId: playerCapital.id,
+        raceEffects: { recruitmentBonus: -10, foodConsumptionMultiplier: 0.8, securityBonus: 20, productionBonus: 15 },
+        classEffects: { recruitmentBonus: 0, foodConsumptionMultiplier: 1.0, securityBonus: 5, productionBonus: 20 }
+      };
+    }
+
     set({
       screen: 'STRATEGY_MAP',
       provinces,
+      globalHeroes,
+      factionResources,
       strategyTurn: 1,
       selectedProvinceId: null,
       pendingBattle: null,
@@ -139,12 +172,14 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   endStrategyTurn: () => {
     const { strategyTurn } = get();
     // 적 AI: 군웅할거 난전 시뮬레이션
-    const { provinces, diplomacyRelations } = get();
+    const { provinces, diplomacyRelations, globalHeroes, factionResources } = get();
     let newProvinces = { ...provinces };
-    const allFactions = Object.keys(FACTIONS).filter(f => f !== PLAYER_FACTION);
+    let newFactionResources = { ...factionResources };
+    const allFactions = Object.keys(FACTIONS);
 
-    allFactions.forEach(fId => {
-      // 30% 확률로 영토 확장 시도 (너무 빠른 영토 변동 방지)
+    // 1. AI 세력들의 행동 (영토 확장 등)
+    const enemyFactions = allFactions.filter(f => f !== PLAYER_FACTION);
+    enemyFactions.forEach(fId => {
       if (Math.random() > 0.3) return;
 
       const myProvs = Object.values(newProvinces).filter(p => p.owner === fId);
@@ -158,7 +193,6 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       }
       
       if (target) {
-        // AI 간 전투는 즉시 결과 산출 (단순 영토 편입)
         newProvinces = {
           ...newProvinces,
           [target.id]: { ...target, owner: fId },
@@ -166,9 +200,26 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       }
     });
 
+    // 2. 모든 세력의 내정 턴 결산 (생산 산출량 합산 및 치안 변동)
+    allFactions.forEach(fId => {
+      // 해당 팩션의 자원이 아직 초기화되지 않았다면 패스 (혹은 기본값)
+      if (!newFactionResources[fId]) return;
+      
+      const { newProvinces: domProvinces, newResources } = processDomesticTurn(
+        fId,
+        newProvinces,
+        globalHeroes,
+        newFactionResources[fId]
+      );
+      
+      newProvinces = domProvinces;
+      newFactionResources[fId] = newResources;
+    });
+
     const victory = checkVictory(newProvinces);
     set({
       provinces: newProvinces,
+      factionResources: newFactionResources,
       strategyTurn: strategyTurn + 1,
       screen: victory ? 'ENDING' : 'STRATEGY_MAP',
       endingType: victory,
@@ -180,6 +231,8 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   resetGame: () => set({
     screen: 'TITLE',
     provinces: {},
+    globalHeroes: {},
+    factionResources: {},
     strategyTurn: 1,
     selectedProvinceId: null,
     pendingBattle: null,

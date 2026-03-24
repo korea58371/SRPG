@@ -555,16 +555,30 @@ html, body, #root {
 }
 
 /* ════════════════════════════════════════
-   Strategy Map Province CSS Hover
+   Strategy Map Province CSS Hover (Optimized)
 ════════════════════════════════════════ */
 .smap-province-group {
   cursor: pointer;
   outline: none;
 }
-.smap-province-group:hover path.smap-land-cell {
-  filter: brightness(1.25);
+
+/* 무거운 CSS 필터(filter: brightness) 대신 하드웨어 가속에 유리한 opacity 레이어를 덮음 */
+.smap-hover-overlay {
+  opacity: 0;
+  transition: opacity 0.05s ease-out;
+  pointer-events: none; /* 중복 Hit Test 방지 */
 }
-.smap-province-group.selected path.smap-land-cell {
-  filter: brightness(1.35);
+
+/* 데스크탑 마우스 호버 시 가벼운 피드백 */
+@media (hover: hover) {
+  .smap-province-group:hover .smap-hover-overlay {
+    opacity: 0.15;
+  }
 }
+
+/* 선택된 상태 유지 시 */
+.smap-province-group.selected .smap-hover-overlay {
+  opacity: 0.25;
+}
+
 

@@ -341,6 +341,7 @@ export interface ProvinceWithCells {
   oceanDepth:    number[];
   terrainIcons:  TerrainIcon[];
   rivers: RiverSegment[];    // 맵 전역에 흐르는 강 줄기들
+  coastlineEdges: { x1: number; y1: number; x2: number; y2: number }[];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -678,6 +679,10 @@ export function generateProvinces(
       owner:       faction,
       isCapital,
       adjacentIds: Array.from(provAdjacency.get(id) ?? []),
+      baseGoldProduction: Math.floor(rand() * 20) + 10,
+      baseFoodProduction: Math.floor(rand() * 30) + 20,
+      baseRecruitment: Math.floor(rand() * 10) + 5,
+      security: 100,
       food:        Math.floor(rand() * 50) + 20,
       gold:        Math.floor(rand() * 40) + 10,
       seedX:       s.px / svgW,
@@ -707,20 +712,32 @@ export function generateProvinces(
     });
   }
 
-  // ── 12. Province 경계 엣지 계산 ─────────────────────────────────────────
+  // ── 12. Province 경계 및 해안선 엣지 계산 ─────────────────────────────
   const boundaryEdges: BoundaryEdge[] = [];
+  const coastlineEdges: { x1: number; y1: number; x2: number; y2: number }[] = [];
   const cc = voronoi.circumcenters;
 
   for (let e = 0; e < halfedges.length; e++) {
     const opp = halfedges[e];
     if (opp === -1 || opp < e) continue;
     const cellA = triangles[e], cellB = triangles[opp];
+    
+    // 육지/바다 경계 (해안선) 판별
+    const landA = isLand[cellA];
+    const landB = isLand[cellB];
+    const t1 = Math.floor(e / 3), t2 = Math.floor(opp / 3);
+    const x1 = cc[2*t1], y1 = cc[2*t1+1], x2 = cc[2*t2], y2 = cc[2*t2+1];
+    
+    if (landA !== landB) {
+      if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
+        coastlineEdges.push({ x1, y1, x2, y2 });
+      }
+    }
+
     const provA = microToProv[cellA], provB = microToProv[cellB];
     if (provA === provB) continue;
     if (provA === null && provB === null) continue;
-    if (provA === null || provB === null) continue; // 해안선 제외 (색 차이로 표현)
-    const t1 = Math.floor(e / 3), t2 = Math.floor(opp / 3);
-    const x1 = cc[2*t1], y1 = cc[2*t1+1], x2 = cc[2*t2], y2 = cc[2*t2+1];
+    if (provA === null || provB === null) continue; // 해안선은 위에서 따로 처리함
     if (isNaN(x1)||isNaN(y1)||isNaN(x2)||isNaN(y2)) continue;
     const fA = seeds[provA].faction, fB = seeds[provB].faction;
     boundaryEdges.push({
@@ -851,5 +868,13 @@ export function generateProvinces(
     }
   }
 
-  return { provinces, allCells, boundaryEdges, oceanDepth: Array.from(oceanDepth), terrainIcons, rivers };
+  return {
+    provinces,
+    allCells,
+    boundaryEdges,
+    oceanDepth: Array.from(oceanDepth),
+    terrainIcons,
+    rivers,
+    coastlineEdges,
+  };
 }

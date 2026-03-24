@@ -1,7 +1,7 @@
 // J:/AI/Game/SRPG/src/types/appTypes.ts
 // 전략 레이어 타입 정의 (전투 레이어와 분리)
 
-import type { FactionId } from './gameTypes';
+import type { FactionId, HeroPassiveEffect } from './gameTypes';
 
 // ─── 화면 상태 ───────────────────────────────────────────────────────────────
 export type AppScreen =
@@ -18,6 +18,23 @@ export type EndingType = 'good' | 'bad';
 // ─── 전투 결과 ───────────────────────────────────────────────────────────────
 export type BattleOutcome = 'player_win' | 'player_lose';
 
+// ─── 전략 레이어 장수 (Global Hero) ─────────────────────────────────────────
+export interface GlobalHero {
+  id: string;
+  name: string;
+  factionId: FactionId;
+  locationProvinceId: string;        // 현재 주둔 중인 영지 ID
+  raceEffects: HeroPassiveEffect;    // 종족 기반 패시브
+  classEffects: HeroPassiveEffect;   // 직업 기반 패시브
+}
+
+// ─── 팩션 전역 자원 ────────────────────────────────────────────────────────
+export interface FactionResource {
+  gold: number;
+  food: number;
+  manpower: number; // 모집된 인력 풀
+}
+
 // ─── Province (세계 지도 영토 단위) ─────────────────────────────────────────
 export interface Province {
   id: string;
@@ -25,8 +42,16 @@ export interface Province {
   owner: FactionId;
   isCapital: boolean;         // 본거지: 함락 시 즉시 배드엔딩
   adjacentIds: string[];      // 인접 Province ID 목록 (전쟁 가능 여부)
-  food: number;               // 내정 자원: 식량
-  gold: number;               // 내정 자원: 금
+  
+  // ─ 내정 수치 (Domestic) ──────────────────────────────────
+  baseGoldProduction: number;   // 기본 금 생산량
+  baseFoodProduction: number;   // 기본 식량 생산량
+  baseRecruitment: number;      // 기본 모병량 (인력)
+  security: number;             // 치안 (0~100)
+  
+  food: number;                 // (보유 식량 - 점진적으로 팩션 전역으로 이전될 수 있음)
+  gold: number;                 // (보유 금)
+
   // Voronoi 시드 좌표 (0~1 정규화)
   seedX: number;
   seedY: number;
@@ -42,6 +67,9 @@ export type StrategyAction = 'domestic' | 'diplomacy' | 'war' | 'end_turn';
 export interface StrategyState {
   screen: AppScreen;
   provinces: Record<string, Province>;
+  globalHeroes: Record<string, GlobalHero>;     // 전 세계의 장수들
+  factionResources: Record<FactionId, FactionResource>; // 각 팩션별 전역 자원
+
   strategyTurn: number;
   selectedProvinceId: string | null;       // 군략화면에서 선택한 Province
   pendingBattle: {

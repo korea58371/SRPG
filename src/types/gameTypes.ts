@@ -23,6 +23,14 @@ export interface TilePos {
   ly: number;
 }
 
+// ─ 장수 내정 특성 (Passive Effects) ─────────────────────────
+export interface HeroPassiveEffect {
+  recruitmentBonus: number;            // 모병량 보너스 (%)
+  foodConsumptionMultiplier: number;   // 군량 소모 배율 (기본 1.0)
+  securityBonus: number;               // 치안 증감 수치 (절대값)
+  productionBonus: number;             // 자원 생산량 보너스 (%)
+}
+
 export interface Unit {
   id: string;
   factionId: FactionId;
@@ -57,4 +65,8 @@ export interface Unit {
   generalIntelligence?: number; // 知力: 지휘 범위 내 병종 방어 +
   generalPolitics?: number;     // 政治: 지휘 범위 내 병종 HP 보너스
   generalCharisma?: number;     // 統率: 지휘 반경 (타일 수)
+
+  // ─ 장수 내정 전용 능력치 ──────────────────────────────────────
+  raceEffects?: HeroPassiveEffect;   // 종족 기반 기본 패시브
+  classEffects?: HeroPassiveEffect;  // 직업 기반 패시브
 }

@@ -111,6 +111,17 @@ export default function UnitInfoPanel() {
                 </div>
               )}
             </div>
+            {/* 장수 내정 특성 표시 */}
+            {(unit.raceEffects || unit.classEffects) && (
+              <div className="mt-2 text-[10px] bg-gray-800/80 rounded p-2 text-gray-300">
+                <div className="text-yellow-400 mb-1 font-bold">🏛️ 내정 효과</div>
+                {unit.raceEffects?.productionBonus && <div>생산 보너스: {unit.raceEffects.productionBonus > 0 ? '+' : ''}{unit.raceEffects.productionBonus}%</div>}
+                {unit.raceEffects?.securityBonus && <div>치안 보너스: {unit.raceEffects.securityBonus > 0 ? '+' : ''}{unit.raceEffects.securityBonus}</div>}
+                {unit.raceEffects?.recruitmentBonus && <div>모병 보너스: {unit.raceEffects.recruitmentBonus > 0 ? '+' : ''}{unit.raceEffects.recruitmentBonus}%</div>}
+                {unit.classEffects?.productionBonus && <div>생산 (직업): {unit.classEffects.productionBonus > 0 ? '+' : ''}{unit.classEffects.productionBonus}%</div>}
+                {unit.classEffects?.securityBonus && <div>치안 (직업): {unit.classEffects.securityBonus > 0 ? '+' : ''}{unit.classEffects.securityBonus}</div>}
+              </div>
+            )}
           </div>
         )}
       </div>
