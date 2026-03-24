@@ -1,215 +1,391 @@
 import { createNoise2D } from 'simplex-noise';
 import { TerrainType } from '../types/gameTypes';
 
-// mapGenerator 내부 전용 좌표 타입
 interface Point { x: number; y: number; }
 
-// ─── 바이옴 정의 ─────────────────────────────────────────────────────────────
-export interface BiomeConfig {
+// ─── 지형 프로필: 고도 기반 임계값 ────────────────────────────────────────────
+// fBm 노이즈값 = 해발 고도 (-1 ~ 1)
+// 임계값이 높을수록 해당 지형이 고지대에 분포
+interface TerrainProfile {
   name: string;
-  label: string;      // 한국어 표시명
-  noiseScale: number; // 클수록 지형이 넓고 완만
-  cliffMin: number;   // 이 값 초과 → CLIFF
-  forestMin: number;  // 이 값 초과 (≤cliffMin) → FOREST
-  grassMin: number;   // 이 값 초과 (≤forestMin) → GRASS
-  beachMin: number;   // 이 값 초과 (≤grassMin) → BEACH
-  // 미만 → SEA
-  lakeNoiseThreshold?: number; // 이 값 미만의 보조 노이즈 → SEA (호수)
+  label: string;
+  noiseScale: number;
+  seaLevel:    number;  // 이하 → SEA
+  beachLevel:  number;  // 이하 → BEACH
+  grassLevel:  number;  // 이하 → GRASS
+  forestLevel: number;  // 이하 → FOREST
+                        // 초과 → CLIFF
 }
 
-export const BIOMES: BiomeConfig[] = [
+const TERRAIN_PROFILES: TerrainProfile[] = [
   {
-    name: 'coastal',
-    label: '해안 지형',
-    noiseScale: 10,
-    cliffMin:   0.70,
-    forestMin:  0.50,
-    grassMin:   0.10,
-    beachMin:  -0.10,
-    // SEA 비율 ~55% → 섬들이 흩어진 느낌
+    name: 'plains',  label: '평원',
+    noiseScale: 40,
+    seaLevel:   -0.80, beachLevel: -0.60,
+    grassLevel:  0.50, forestLevel: 0.75,
   },
   {
-    name: 'lakeland',
-    label: '호수 지형',
-    noiseScale: 14,
-    cliffMin:   0.55,
-    forestMin:  0.15,
-    grassMin:  -0.55,
-    beachMin:  -0.75,
-    lakeNoiseThreshold: -0.35, // 보조 노이즈로 내륙 호수 생성
+    name: 'forested', label: '삼림',
+    noiseScale: 30,
+    seaLevel:   -0.75, beachLevel: -0.50,
+    grassLevel:  0.10, forestLevel: 0.65,
   },
   {
-    name: 'inland',
-    label: '내륙 지형',
-    noiseScale: 20,
-    cliffMin:   0.55,
-    forestMin:  0.20,
-    grassMin:  -0.70,
-    beachMin:  -0.90,
-    // SEA 거의 없음 → 완전 내륙
-  },
-  {
-    name: 'forested',
-    label: '삼림 지형',
-    noiseScale: 13,
-    cliffMin:   0.65,
-    forestMin: -0.10, // 숲 구간 매우 넓음
-    grassMin:  -0.30,
-    beachMin:  -0.50,
-  },
-  {
-    name: 'plains',
-    label: '평원 지형',
-    noiseScale: 22,
-    cliffMin:   0.80, // 절벽 거의 없음
-    forestMin:  0.55, // 숲도 거의 없음
-    grassMin:  -0.50, // 초원이 압도적
-    beachMin:  -0.70,
+    name: 'mixed', label: '혼합',
+    noiseScale: 34,
+    seaLevel:   -0.70, beachLevel: -0.45,
+    grassLevel:  0.25, forestLevel: 0.60,
   },
 ];
 
-// ─── A* 패스파인딩 ────────────────────────────────────────────────────────────
-export function findPath(map: TerrainType[][], start: Point, end: Point): Point[] {
+// ─── 물 배치 레이아웃 ─────────────────────────────────────────────────────────
+type WaterSide = 'north' | 'south' | 'east' | 'west';
+
+interface WaterLayout {
+  type: 'none' | 'lake' | 'coastal_one' | 'coastal_all';
+  label: string;
+  edgeSeaBias?: number;
+  edgeRadius?:  number;
+  lakeNoiseThreshold?: number;
+  lakeEdgeMargin?:     number;
+}
+
+const WATER_LAYOUTS: WaterLayout[] = [
+  { type: 'none',         label: '' },
+  { type: 'none',         label: '' },
+  {
+    type: 'lake',    label: '+ 내륙 호수',
+    lakeNoiseThreshold: -0.42, lakeEdgeMargin: 8,
+  },
+  {
+    type: 'coastal_one', label: '+ 해안 (대륙)',
+    edgeSeaBias: 1.8, edgeRadius: 12,
+  },
+  {
+    type: 'coastal_all', label: '+ 사방 바다 (섬)',
+    edgeSeaBias: 1.6, edgeRadius: 11,
+  },
+];
+
+export interface MapInfo {
+  label: string;
+  terrainName: string;
+  waterType: string;
+}
+
+// ─── fBm 노이즈 생성기 ────────────────────────────────────────────────────────
+function makeFbm(scale: number) {
+  const n1 = createNoise2D();
+  const n2 = createNoise2D();
+  const n3 = createNoise2D();
+  return (x: number, y: number): number => {
+    const nx = x / scale, ny = y / scale;
+    return (
+      1.00 * n1(nx,      ny     ) +
+      0.50 * n2(nx * 2,  ny * 2 ) +
+      0.25 * n3(nx * 4,  ny * 4 )
+    ) / 1.75;
+  };
+}
+
+// ─── 고도 → 지형 타입 변환 ────────────────────────────────────────────────────
+function elevToTerrain(elev: number, p: TerrainProfile): TerrainType {
+  if (elev <= p.seaLevel)    return TerrainType.SEA;
+  if (elev <= p.beachLevel)  return TerrainType.BEACH;
+  if (elev <= p.grassLevel)  return TerrainType.GRASS;
+  if (elev <= p.forestLevel) return TerrainType.FOREST;
+  return TerrainType.CLIFF;
+}
+
+// ─── A* (8방향 + 고도차 패널티) ─────────────────────────────────────────────────────
+export function findPath(
+  map: TerrainType[][],
+  elevMap: number[][],
+  start: Point,
+  end: Point,
+): Point[] {
   const height = map.length;
   const width  = map[0].length;
 
-  const getCost = (p: Point) => {
-    const type = map[p.y][p.x];
-    if (type === TerrainType.CLIFF)  return 10;
-    if (type === TerrainType.SEA)    return 100;
-    if (type === TerrainType.PATH)   return 1;
-    if (type === TerrainType.FOREST) return 5;
-    return 3;
+  const getCost = (from: Point, to: Point, diag: boolean): number => {
+    const t = map[to.y][to.x];
+    if (t === TerrainType.CLIFF)  return 50;
+    if (t === TerrainType.SEA)    return 200;
+    if (t === TerrainType.PATH)   return diag ? 1.414 : 1;
+    if (t === TerrainType.FOREST) return diag ? 28 : 20;
+
+    const grad = Math.abs((elevMap[to.y]?.[to.x] ?? 0) - (elevMap[from.y]?.[from.x] ?? 0));
+    const slopePenalty = grad * 18;
+    const base = (t === TerrainType.BEACH ? 4 : 2) * (diag ? 1.414 : 1);
+    return base + slopePenalty;
   };
 
-  const heuristic = (a: Point, b: Point) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  // 체비쉐프 거리 (8방향 휴리스틱)
+  const h = (a: Point, b: Point) =>
+    Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const key  = (p: Point) => `${p.x},${p.y}`;
+  const open = new Set<string>();
+  const closed = new Set<string>();
+  const came = new Map<string, Point>();
+  const g = new Map<string, number>();
+  const f = new Map<string, number>();
+  const sk = key(start);
+  open.add(sk); g.set(sk, 0); f.set(sk, h(start, end));
 
-  const openSet   = new Set<string>();
-  const closedSet = new Set<string>();
-  const cameFrom  = new Map<string, Point>();
-  const gScore    = new Map<string, number>();
-  const fScore    = new Map<string, number>();
-  const toKey     = (p: Point) => `${p.x},${p.y}`;
-  const startKey  = toKey(start);
-
-  openSet.add(startKey);
-  gScore.set(startKey, 0);
-  fScore.set(startKey, heuristic(start, end));
-
-  const getMinFScoreNode = () => {
-    let minKey = '', minVal = Infinity;
-    for (const key of openSet) {
-      const val = fScore.get(key) ?? Infinity;
-      if (val < minVal) { minVal = val; minKey = key; }
-    }
-    return minKey;
+  const minF = () => {
+    let mk = '', mv = Infinity;
+    for (const k of open) { const v = f.get(k) ?? Infinity; if (v < mv) { mv = v; mk = k; } }
+    return mk;
   };
 
-  while (openSet.size > 0) {
-    const currentKey = getMinFScoreNode();
-    const [cx, cy]   = currentKey.split(',').map(Number);
+  // 8방향 이웃 (대각: isDiag=true)
+  const DIRS = [
+    { dx:  1, dy:  0, diag: false }, { dx: -1, dy:  0, diag: false },
+    { dx:  0, dy:  1, diag: false }, { dx:  0, dy: -1, diag: false },
+    { dx:  1, dy:  1, diag: true  }, { dx: -1, dy:  1, diag: true  },
+    { dx:  1, dy: -1, diag: true  }, { dx: -1, dy: -1, diag: true  },
+  ];
 
+  while (open.size > 0) {
+    const ck = minF();
+    const [cx, cy] = ck.split(',').map(Number);
     if (cx === end.x && cy === end.y) {
       const path: Point[] = [];
-      let curr = currentKey;
-      while (cameFrom.has(curr)) {
-        const [px, py] = curr.split(',').map(Number);
+      let cur = ck;
+      while (came.has(cur)) {
+        const [px, py] = cur.split(',').map(Number);
         path.unshift({ x: px, y: py });
-        curr = toKey(cameFrom.get(curr)!);
+        cur = key(came.get(cur)!);
       }
       return path;
     }
-
-    openSet.delete(currentKey);
-    closedSet.add(currentKey);
-
-    const neighbors = [
-      { x: cx + 1, y: cy }, { x: cx - 1, y: cy },
-      { x: cx, y: cy + 1 }, { x: cx, y: cy - 1 },
-    ];
-
-    for (const n of neighbors) {
+    open.delete(ck); closed.add(ck);
+    for (const { dx, dy, diag } of DIRS) {
+      const n = { x: cx + dx, y: cy + dy };
       if (n.x < 0 || n.x >= width || n.y < 0 || n.y >= height) continue;
-      const nKey = toKey(n);
-      if (closedSet.has(nKey)) continue;
-
-      const tentativeG = (gScore.get(currentKey) ?? Infinity) + getCost(n);
-      if (!openSet.has(nKey)) openSet.add(nKey);
-      else if (tentativeG >= (gScore.get(nKey) ?? Infinity)) continue;
-
-      cameFrom.set(nKey, { x: cx, y: cy });
-      gScore.set(nKey, tentativeG);
-      fScore.set(nKey, tentativeG + heuristic(n, end));
+      // 대각 이동 시: 양쪽 담장 들[cx,n.y]와 [n.x,cy]가 올 수 있어야 함 (코너커팅 방지)
+      if (diag) {
+        const t1 = map[cy]?.[n.x]; const t2 = map[n.y]?.[cx];
+        if (t1 === TerrainType.CLIFF || t1 === TerrainType.SEA) continue;
+        if (t2 === TerrainType.CLIFF || t2 === TerrainType.SEA) continue;
+      }
+      const nk = key(n);
+      if (closed.has(nk)) continue;
+      const from: Point = { x: cx, y: cy };
+      const tg = (g.get(ck) ?? Infinity) + getCost(from, n, diag);
+      if (!open.has(nk)) open.add(nk);
+      else if (tg >= (g.get(nk) ?? Infinity)) continue;
+      came.set(nk, from);
+      g.set(nk, tg);
+      f.set(nk, tg + h(n, end));
     }
   }
   return [];
 }
 
-// ─── 맵 생성 (바이옴 랜덤 선택) ──────────────────────────────────────────────
-export function generateMapData(
+// ─── 도시 간 중간 경유지 생성 (길을 자연스럽게 우회시킴) ──────────────────────
+function getWaypoints(
+  start: Point, end: Point,
+  map: TerrainType[][], width: number, height: number,
+): Point[] {
+  const dist = Math.abs(start.x - end.x) + Math.abs(start.y - end.y);
+  if (dist < 20) return []; // 짧은 거리는 경유지 없이 직접 연결
+
+  const count  = dist < 40 ? 1 : 2;
+  const spread = Math.min(width, height) * 0.12;
+  const waypoints: Point[] = [];
+
+  for (let i = 1; i <= count; i++) {
+    const t     = i / (count + 1);
+    const baseX = Math.round(start.x + (end.x - start.x) * t);
+    const baseY = Math.round(start.y + (end.y - start.y) * t);
+
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const ox = Math.round((Math.random() - 0.5) * spread * 2);
+      const oy = Math.round((Math.random() - 0.5) * spread * 2);
+      const px = Math.max(2, Math.min(width - 3, baseX + ox));
+      const py = Math.max(2, Math.min(height - 3, baseY + oy));
+      const type = map[py]?.[px];
+      if (type === TerrainType.GRASS || type === TerrainType.BEACH) {
+        waypoints.push({ x: px, y: py });
+        break;
+      }
+    }
+  }
+  return waypoints;
+}
+
+// ─── 생태적 도시 배치 ─────────────────────────────────────────────────────────
+// 스코어 기준 (높을수록 좋음):
+//   1. 평탄도: 주변 3×3 고도 분산이 낮을수록 점수 高
+//   2. 수변 접근: 5타일 이내에 SEA/BEACH가 있으면 보너스
+//   3. 도시 간 최소 이격 보장 (너무 가까우면 제외)
+function placeEcologicalCities(
+  map: TerrainType[][],
+  elevMap: number[][],
   width: number,
   height: number,
-  biome?: BiomeConfig, // 외부에서 지정 가능, 미지정 시 랜덤
-): { map: TerrainType[][]; cities: Point[]; biome: BiomeConfig } {
-  const selectedBiome = biome ?? BIOMES[Math.floor(Math.random() * BIOMES.length)];
-  const {
-    noiseScale,
-    cliffMin, forestMin, grassMin, beachMin,
-    lakeNoiseThreshold,
-  } = selectedBiome;
+  count: number,
+): Point[] {
+  const MIN_DIST = Math.min(width, height) / (count + 1); // 최소 이격
+  const WATER_RADIUS = 6;
 
-  const noise2D      = createNoise2D();
-  const lakeNoise2D  = lakeNoiseThreshold !== undefined ? createNoise2D() : null;
-  const map: TerrainType[][] = [];
+  interface Candidate { pos: Point; score: number; }
+  const candidates: Candidate[] = [];
 
-  for (let y = 0; y < height; y++) {
-    const row: TerrainType[] = [];
-    for (let x = 0; x < width; x++) {
-      const nx    = x / noiseScale;
-      const ny    = y / noiseScale;
-      const value = noise2D(nx, ny);
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      if (map[y][x] !== TerrainType.GRASS) continue;
 
-      let type: TerrainType;
-      if      (value > cliffMin)  type = TerrainType.CLIFF;
-      else if (value > forestMin) type = TerrainType.FOREST;
-      else if (value > grassMin)  type = TerrainType.GRASS;
-      else if (value > beachMin)  type = TerrainType.BEACH;
-      else                        type = TerrainType.SEA;
-
-      // 보조 노이즈로 내륙 호수 생성 (lakeland 바이옴)
-      if (lakeNoise2D && lakeNoiseThreshold !== undefined) {
-        const lakeVal = lakeNoise2D(nx * 1.8, ny * 1.8); // 더 작은 스케일
-        if (lakeVal < lakeNoiseThreshold && type !== TerrainType.CLIFF) {
-          type = TerrainType.SEA;
+      // 평탄도: 주변 3×3 고도 분산
+      let sumElev = 0, sumSq = 0, cnt = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const e = elevMap[y + dy]?.[x + dx];
+          if (e !== undefined) { sumElev += e; sumSq += e * e; cnt++; }
         }
       }
+      const mean = sumElev / cnt;
+      const variance = sumSq / cnt - mean * mean;
+      const flatScore = 1 / (1 + variance * 50); // 분산 낮을수록 1에 가까움
 
-      row.push(type);
+      // 수변 접근 보너스
+      let waterNear = false;
+      outer: for (let dy = -WATER_RADIUS; dy <= WATER_RADIUS; dy++) {
+        for (let dx = -WATER_RADIUS; dx <= WATER_RADIUS; dx++) {
+          const t = map[y + dy]?.[x + dx];
+          if (t === TerrainType.SEA || t === TerrainType.BEACH) { waterNear = true; break outer; }
+        }
+      }
+      const waterScore = waterNear ? 1.5 : 1.0;
+
+      candidates.push({ pos: { x, y }, score: flatScore * waterScore });
     }
-    map.push(row);
   }
 
-  // ── 거점(city) 3개: GRASS 타일에만 배치 ───────────────────────────────────
-  const cities: Point[] = [];
-  let attempts = 0;
-  while (cities.length < 3 && attempts < 5000) {
-    attempts++;
+  // 스코어 내림차순 정렬 후, 최소 이격 거리 보장하며 선택
+  candidates.sort((a, b) => b.score - a.score);
+  const chosen: Point[] = [];
+
+  for (const c of candidates) {
+    if (chosen.length >= count) break;
+    const tooClose = chosen.some(
+      p => Math.abs(p.x - c.pos.x) + Math.abs(p.y - c.pos.y) < MIN_DIST,
+    );
+    if (!tooClose) chosen.push(c.pos);
+  }
+
+  // 부족하면 랜덤 GRASS로 보충
+  let fallbackAttempts = 0;
+  while (chosen.length < count && fallbackAttempts++ < 3000) {
     const rx = Math.floor(Math.random() * width);
     const ry = Math.floor(Math.random() * height);
     if (map[ry][rx] === TerrainType.GRASS) {
-      cities.push({ x: rx, y: ry });
+      const tooClose = chosen.some(p => Math.abs(p.x - rx) + Math.abs(p.y - ry) < MIN_DIST * 0.5);
+      if (!tooClose) chosen.push({ x: rx, y: ry });
     }
   }
 
-  // ── 도시 간 A* 경로를 PATH 타일로 변환 ────────────────────────────────────
-  for (let i = 0; i < cities.length; i++) {
-    const path = findPath(map, cities[i], cities[(i + 1) % cities.length]);
-    for (const p of path) {
-      if (map[p.y][p.x] !== TerrainType.SEA && map[p.y][p.x] !== TerrainType.CLIFF) {
-        map[p.y][p.x] = TerrainType.PATH;
+  return chosen;
+}
+
+// ─── 맵 생성 (생태 파이프라인) ───────────────────────────────────────────────
+// 파이프라인:
+//   1. fBm 고도맵 생성
+//   2. 물 레이아웃 (해안/호수) → 고도 조정
+//   3. 고도 → 지형 변환
+//   4. 생태 도시 배치 (평탄 + 수변 스코어링)
+//   5. 계곡/평야 우선 길 라우팅 (경사도 패널티 A*)
+export function generateMapData(
+  width: number,
+  height: number,
+): { map: TerrainType[][]; cities: Point[]; mapInfo: MapInfo } {
+  const terrain = TERRAIN_PROFILES[Math.floor(Math.random() * TERRAIN_PROFILES.length)];
+  const water   = WATER_LAYOUTS[Math.floor(Math.random() * WATER_LAYOUTS.length)];
+  const waterSide: WaterSide | null =
+    water.type === 'coastal_one'
+      ? (['north', 'south', 'east', 'west'] as WaterSide[])[Math.floor(Math.random() * 4)]
+      : null;
+
+  const label = water.label
+    ? `${terrain.label} ${water.label}${waterSide ? ` (${
+        waterSide === 'north' ? '북' : waterSide === 'south' ? '남' :
+        waterSide === 'east'  ? '동' : '서'})` : ''}`
+    : terrain.label;
+
+  const { edgeSeaBias, edgeRadius, lakeNoiseThreshold, lakeEdgeMargin } = water;
+
+  // STEP 1: 고도맵 생성 (fBm)
+  const fbm = makeFbm(terrain.noiseScale);
+  const elevMap: number[][] = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) => fbm(x, y)),
+  );
+
+  // STEP 2: 물 레이아웃 → 고도 조정
+  // coastal: 가장자리 고도를 낮춰 해수면 아래로 → 바다
+  // lake: 보조 노이즈로 내륙 저지대에 호수
+  const lakeNoise = lakeNoiseThreshold !== undefined ? (() => {
+    const fn = createNoise2D();
+    return (x: number, y: number) => fn(x / 30, y / 30);
+  })() : null;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (edgeSeaBias && edgeRadius) {
+        let dist: number;
+        if (water.type === 'coastal_all') {
+          dist = Math.min(x, width - 1 - x, y, height - 1 - y);
+        } else if (waterSide === 'north')  { dist = y; }
+        else if (waterSide === 'south')    { dist = height - 1 - y; }
+        else if (waterSide === 'east')     { dist = width - 1 - x; }
+        else                               { dist = x; }
+        if (dist < edgeRadius) {
+          const t = 1 - dist / edgeRadius;
+          elevMap[y][x] -= edgeSeaBias * t * t;
+        }
       }
     }
   }
 
-  return { map, cities, biome: selectedBiome };
+  // STEP 3: 고도 → 지형 변환
+  const map: TerrainType[][] = elevMap.map((row, y) =>
+    row.map((elev, x) => {
+      let type = elevToTerrain(elev, terrain);
+
+      // 호수: 내륙 저지대 + 보조 노이즈
+      if (lakeNoise && lakeNoiseThreshold !== undefined) {
+        const margin = lakeEdgeMargin ?? 0;
+        const distEdge = Math.min(x, width - 1 - x, y, height - 1 - y);
+        if (distEdge >= margin && type !== TerrainType.SEA && type !== TerrainType.CLIFF) {
+          if (lakeNoise(x, y) < lakeNoiseThreshold) type = TerrainType.SEA;
+        }
+      }
+      return type;
+    }),
+  );
+
+  // STEP 4: 생태 도시 배치 (평탄도 + 수변 스코어)
+  const cities = placeEcologicalCities(map, elevMap, width, height, 3);
+
+  // STEP 5: 계곡/평야 우선 A* + 랜덤 경유지로 구불구불한 길 라우팅
+  for (let i = 0; i < cities.length; i++) {
+    const from  = cities[i];
+    const to    = cities[(i + 1) % cities.length];
+    const viaPoints = getWaypoints(from, to, map, width, height);
+    const stops = [from, ...viaPoints, to];
+
+    // 세그먼트별로 A* 라우팅, GRASS·BEACH에만 PATH 페인팅
+    for (let j = 0; j < stops.length - 1; j++) {
+      const seg = findPath(map, elevMap, stops[j], stops[j + 1]);
+      for (const p of seg) {
+        const t = map[p.y][p.x];
+        // SEA·CLIFF 위에는 길 불가, 나머지(GRASS·BEACH·FOREST)는 자연스러운 임도
+        if (t !== TerrainType.SEA && t !== TerrainType.CLIFF) {
+          map[p.y][p.x] = TerrainType.PATH;
+        }
+      }
+    }
+  }
+
+  return { map, cities, mapInfo: { label, terrainName: terrain.name, waterType: water.type } };
 }

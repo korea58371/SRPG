@@ -1,34 +1,58 @@
 // J:/AI/Game/SRPG/src/store/gameStore.ts
-// 턴제 SRPG 핵심 상태 관리
+// CT(Charge Time) 기반 이니셔티브 턴제 + 장수(General) 시스템
 //
-// 플로우: 유닛 선택 → 이동 범위 BFS → 호버 경로 미리보기
-//         → 클릭 확정 → 행동 메뉴(공격/스킬/대기/취소)
-//         → 경로 이동 + 전투 처리 → 턴 종료
+// ─ CT 이니셔티브 흐름 ────────────────────────────────────────────
+//   1. 모든 유닛 ct += speed (틱마다)
+//   2. CT ≥ CT_THRESHOLD(100) 도달 유닛이 행동권 획득
+//   3. 플레이어 유닛이면 자동 선택 → 타일 클릭 / 행동 메뉴
+//   4. 행동 완료 후 ct -= CT_THRESHOLD → 다음 유닛 계산
+// ─ 장수(General) 버프 ────────────────────────────────────────────
+//   장수 unitType='GENERAL'이 charisma 반경 내 아군 병종에 버프
+//   attack += strength*0.5 / defense += intelligence*0.3
+// ───────────────────────────────────────────────────────────────
 
 import { create } from 'zustand';
 import type { Unit, FactionId, UnitType, TilePos, BattleType } from '../types/gameTypes';
 import { TerrainType } from '../types/gameTypes';
-import { MAP_CONFIG, UNIT_CONFIG, BASE_STATS, UNIT_MATCHUPS } from '../constants/gameConfig';
+import { MAP_CONFIG, UNIT_CONFIG, BASE_STATS, UNIT_MATCHUPS, CT_THRESHOLD, GENERAL_INITIAL_STATS } from '../constants/gameConfig';
 import { calcMoveRange, findMovePath } from '../utils/moveRange';
-import type { BiomeConfig } from '../utils/mapGenerator';
+import type { MapInfo } from '../utils/mapGenerator';
+import type { BattleOutcome } from '../types/appTypes';
 
-// ─── 스폰 가능 여부 ──────────────────────────────────────────────────────────
+// ─── 스폰 체크 ────────────────────────────────────────────────────────────────
 const isSpawnBlockedTile = (type: TerrainType): boolean =>
   type === TerrainType.SEA || type === TerrainType.CLIFF;
 
-export type TurnPhase = 'player' | 'enemy';
 export type ActionMenuType = 'ATTACK' | 'SKILL' | 'ITEM' | 'WAIT' | 'CANCEL';
 
-// ─── 맨해튼 거리 (SRPG 표준 +자/다이아몬드 형태, 대각선 미포함) ───────────────
+// ─── 거리 함수 ────────────────────────────────────────────────────────────────
 const manhattan = (ax: number, ay: number, bx: number, by: number): number =>
   Math.abs(ax - bx) + Math.abs(ay - by);
 
-
-// ─── 체비쇼프 거리 (대각선 포함) ─────────────────────────────────────────────
 const chebyshevDist = (ax: number, ay: number, bx: number, by: number): number =>
   Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 
-// ─── 공격 범위 내 적군 탐색 ─────────────────────────────────────────────────
+// ─── 장수 버프 계산 ───────────────────────────────────────────────────────────
+// 지정 유닛에게 적용되는 가장 가까운 아군 장수의 버프를 반환
+export function getGeneralBuff(
+  unit: Unit,
+  allUnits: Record<string, Unit>,
+): { attackBonus: number; defenseBonus: number } {
+  let best: Unit | null = null;
+  let bestDist = Infinity;
+  for (const u of Object.values(allUnits)) {
+    if (u.unitType !== 'GENERAL' || u.factionId !== unit.factionId || u.state === 'DEAD') continue;
+    const radius = u.generalCharisma ?? 3;
+    const dist = manhattan(unit.logicalX, unit.logicalY, u.logicalX, u.logicalY);
+    if (dist <= radius && dist < bestDist) { best = u; bestDist = dist; }
+  }
+  return {
+    attackBonus:  best ? (best.generalStrength ?? 0) * 0.5 : 0,
+    defenseBonus: best ? (best.generalIntelligence ?? 0) * 0.3 : 0,
+  };
+}
+
+// ─── 공격 범위 내 적군 탐색 ───────────────────────────────────────────────────
 export function getAttackableTargets(
   attacker: Unit,
   allUnits: Record<string, Unit>,
@@ -43,23 +67,30 @@ export function getAttackableTargets(
   );
 }
 
-// ─── 전투 데미지 계산 ──────────────────────────────────────────────────────
-function calcDamage(attacker: Unit, defender: Unit): number {
-  const matchup = UNIT_MATCHUPS[attacker.unitType];
+// ─── 전투 데미지 계산 (장수 버프 포함) ────────────────────────────────────────
+function calcDamage(attacker: Unit, defender: Unit, allUnits: Record<string, Unit>): number {
+  const matchup = UNIT_MATCHUPS[attacker.unitType as keyof typeof UNIT_MATCHUPS];
   let multiplier = 1.0;
-  if (matchup && matchup.advantage === defender.unitType) multiplier += matchup.bonus;
-  if (matchup && matchup.disadvantage === defender.unitType) multiplier -= 0.2;
+  if (matchup?.advantage === defender.unitType) multiplier += matchup.bonus;
+  if (matchup?.disadvantage === defender.unitType) multiplier -= 0.2;
 
-  const raw = attacker.attack - defender.defense * 0.5;
+  // 장수 버프 적용
+  const atkBuff = getGeneralBuff(attacker, allUnits);
+  const defBuff = getGeneralBuff(defender, allUnits);
+  const effectiveAtk = attacker.attack + atkBuff.attackBonus;
+  const effectiveDef = defender.defense + defBuff.defenseBonus;
+
+  const raw = effectiveAtk - effectiveDef * 0.5;
   const base = Math.max(1, raw) * multiplier;
-  const variance = base * 0.1 * (Math.random() - 0.5) * 2; // ±10%
+  const variance = base * 0.1 * (Math.random() - 0.5) * 2;
   return Math.max(1, Math.round(base + variance));
 }
 
-// ─── 타일/세력 집합 빌더 ─────────────────────────────────────────────────────
+// ─── 픽셀 변환 ───────────────────────────────────────────────────────────────
 export const tileToPixel = (logical: number) =>
   logical * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
 
+// ─── 타일/세력 세트 빌더 ─────────────────────────────────────────────────────
 function buildTileSets(units: Record<string, Unit>, selfId: string) {
   const friendlyTiles = new Set<string>();
   const enemyTiles = new Set<string>();
@@ -73,8 +104,9 @@ function buildTileSets(units: Record<string, Unit>, selfId: string) {
   return { friendlyTiles, enemyTiles };
 }
 
-const getFactionByIndex = (i: number): FactionId =>
-  i < UNIT_CONFIG.PLAYER_UNIT_COUNT ? 'western_empire' : 'eastern_alliance';
+// ─── 팩션/병종 결정 ───────────────────────────────────────────────────────────
+const getFactionByIndex = (i: number, attacker: FactionId, defender: FactionId): FactionId =>
+  i < UNIT_CONFIG.PLAYER_UNIT_COUNT ? attacker : defender;
 
 const getRandomType = (): UnitType => {
   const t: UnitType[] = ['INFANTRY', 'SPEARMAN', 'CAVALRY', 'ARCHER'];
@@ -83,21 +115,66 @@ const getRandomType = (): UnitType => {
 
 export interface FloatingDamage {
   id: string;
-  x: number; // pixel x (화면 좌표)
-  y: number; // pixel y
+  x: number;
+  y: number;
   value: number;
   isCrit: boolean;
 }
 
-// ─── Store 타입 정의 ────────────────────────────────────────────────────────
+// ─── CT 이니셔티브 계산 ───────────────────────────────────────────────────────
+// 살아있는 모든 유닛의 CT를 진행시켜 다음 행동 유닛을 결정
+function _calcNextActive(
+  units: Record<string, Unit>,
+): { updatedUnits: Record<string, Unit>; activeId: string } {
+  const alive = Object.values(units).filter(u => u.state !== 'DEAD');
+  if (alive.length === 0) return { updatedUnits: units, activeId: '' };
+
+  // CT_THRESHOLD 이상인 유닛이 없으면 최소 시간 계산 후 일괄 증가
+  const alreadyReady = alive.filter(u => u.ct >= CT_THRESHOLD);
+  let finalUnits = { ...units };
+
+  if (alreadyReady.length === 0) {
+    // 가장 빠르게 CT_THRESHOLD에 도달하는 시간 계산
+    let minTime = Infinity;
+    for (const u of alive) {
+      const timeNeeded = (CT_THRESHOLD - u.ct) / u.speed;
+      if (timeNeeded < minTime) minTime = timeNeeded;
+    }
+    // 전체 CT 증가
+    for (const u of alive) {
+      const newCt = u.ct + minTime * u.speed;
+      finalUnits[u.id] = { ...finalUnits[u.id], ct: newCt };
+    }
+  }
+
+  // 가장 높은 CT를 가진 유닛 선택 (동률: 속도 우선, 그다음 플레이어 우선)
+  const ready = alive
+    .map(u => finalUnits[u.id])
+    .filter(u => u.ct >= CT_THRESHOLD)
+    .sort((a, b) => {
+      if (b.ct !== a.ct) return b.ct - a.ct;
+      if (b.speed !== a.speed) return b.speed - a.speed;
+      // 우선권은 잠정적으로 플레이어 진영(또는 특정 공격자 진영)에게 줍니다. (TODO: initiative 속성)
+      // 여기서는 하드코딩된 'western_empire' 대신 임의 배정
+      return -1; 
+    });
+
+  return { updatedUnits: finalUnits, activeId: ready[0]?.id ?? '' };
+}
+
+// ─── Store 타입 정의 ──────────────────────────────────────────────────────────
 interface GameState {
   units: Record<string, Unit>;
   mapData: TerrainType[][] | null;
   cities: { x: number; y: number }[];
   battleType: BattleType;
-  biome: BiomeConfig | null;
-  currentTurn: TurnPhase;
-  turnNumber: number;
+  biome: MapInfo | null;
+
+  // ─ CT 이니셔티브 ─
+  activeUnitId: string | null;     // 현재 행동권을 가진 유닛
+  turnNumber: number;              // 행동 횟수 (표시용)
+
+  // ─ 선택/이동 ─
   selectedUnitId: string | null;
   moveRangeTiles: Set<string>;
   hoveredMoveTile: TilePos | null;
@@ -108,38 +185,41 @@ interface GameState {
   combatLog: string[];
   floatingDamages: FloatingDamage[];
 
+  // 전투 결과 (appStore가 읽어서 화면 전환에 사용)
+  battleResult: BattleOutcome | null;
+  clearBattleResult: () => void;
+
   // 공격 타겟 선택 모드
-  attackTargetMode: boolean;       // true일 때 AttackRangeLayer 타일이 클릭 가능
+  attackTargetMode: boolean;
+
+  hoveredUnitId: string | null;
+  setHoveredUnitId: (id: string | null) => void;
+  removeFloatingDamage: (id: string) => void;
   enterAttackTargetMode: () => void;
   executeAttackOnTarget: (targetId: string) => void;
 
   setMapData: (data: TerrainType[][]) => void;
   setCities: (cities: { x: number; y: number }[]) => void;
   setBattleType: (type: BattleType) => void;
-  setBiome: (biome: BiomeConfig) => void;
-  initUnits: (mapWidth: number, mapHeight: number) => void;
+  setBiome: (biome: MapInfo) => void;
+  initUnits: (mapWidth: number, mapHeight: number, attackerFactionId: FactionId, defenderFactionId: FactionId) => void;
   selectUnit: (id: string | null) => void;
   setHoveredMoveTile: (tile: TilePos | null) => void;
   confirmMove: (lx: number, ly: number) => void;
   cancelConfirmedMove: () => void;
   executeAction: (action: ActionMenuType) => void;
-  endPlayerTurn: () => void;
-  removeFloatingDamage: (id: string) => void;
-
-  // 유닛 정보 패널
-  hoveredUnitId: string | null;
-  setHoveredUnitId: (id: string | null) => void;
+  endUnitTurn: () => void;      // CT 차감 후 다음 유닛 계산 (구 endPlayerTurn)
 }
 
-// ─── Store 생성 ────────────────────────────────────────────────────────────
+// ─── Store 생성 ───────────────────────────────────────────────────────────────
 export const useGameStore = create<GameState>((set, get) => ({
   units: {},
   mapData: null,
   cities: [],
   battleType: 'defensive',
   biome: null,
-  currentTurn: 'player',
-  turnNumber: 1,
+  activeUnitId: null,
+  turnNumber: 0,
   selectedUnitId: null,
   moveRangeTiles: new Set<string>(),
   hoveredMoveTile: null,
@@ -150,11 +230,11 @@ export const useGameStore = create<GameState>((set, get) => ({
   floatingDamages: [],
   attackTargetMode: false,
   hoveredUnitId: null,
+  battleResult: null,
 
   setHoveredUnitId: (id) => set({ hoveredUnitId: id }),
-
+  clearBattleResult: () => set({ battleResult: null }),
   removeFloatingDamage: (id) => set(s => ({ floatingDamages: s.floatingDamages.filter(d => d.id !== id) })),
-
   enterAttackTargetMode: () => set({ attackTargetMode: true }),
 
   executeAttackOnTarget: (targetId) => {
@@ -176,13 +256,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   setBattleType: (type) => set({ battleType: type }),
   setBiome: (biome) => set({ biome }),
 
-  // ─── 유닛 초기 배치 ───────────────────────────────────────────
-  initUnits: (mapWidth, mapHeight) => {
+  // ─── 유닛 초기 배치 ──────────────────────────────────────────────────────
+  initUnits: (mapWidth, mapHeight, attacker, defender) => {
     const newUnits: Record<string, Unit> = {};
     const usedTiles = new Set<string>();
     const { mapData, cities, battleType } = get();
 
-    // ── 유효 스폰 타일 체크 ──────────────────────────────────────────────
     const isValidSpawn = (lx: number, ly: number): boolean => {
       if (lx < 0 || lx >= mapWidth || ly < 0 || ly >= mapHeight) return false;
       if (usedTiles.has(`${lx},${ly}`)) return false;
@@ -190,96 +269,70 @@ export const useGameStore = create<GameState>((set, get) => ({
       return !isSpawnBlockedTile(mapData[ly]?.[lx]);
     };
 
-    // ── 거점 반경 4타일 내 유효 타일 풀 ─────────────────────────────────
     const CITY_RADIUS = 4;
     const getCityPool = (): { lx: number; ly: number }[] => {
       const pool: { lx: number; ly: number }[] = [];
       for (const city of cities) {
         for (let dy = -CITY_RADIUS; dy <= CITY_RADIUS; dy++) {
           for (let dx = -CITY_RADIUS; dx <= CITY_RADIUS; dx++) {
-            if (Math.abs(dx) + Math.abs(dy) > CITY_RADIUS) continue; // 다이아몬드 형태
-            const nx = city.x + dx;
-            const ny = city.y + dy;
-            const terrain = mapData?.[ny]?.[nx];
-            if (nx >= 0 && ny >= 0 && nx < mapWidth && ny < mapHeight && terrain !== undefined && !isSpawnBlockedTile(terrain)) {
-              pool.push({ lx: nx, ly: ny });
-            }
+            if (Math.abs(dx) + Math.abs(dy) > CITY_RADIUS) continue;
+            const lx = city.x + dx, ly = city.y + dy;
+            if (isValidSpawn(lx, ly)) pool.push({ lx, ly });
           }
         }
       }
       return pool;
     };
 
-    // ── 맵 가장자리 20% 구간 유효 타일 풀 (PATH 우선) ────────────────────
-    const getEdgePool = (minX: number, maxX: number): { lx: number; ly: number }[] => {
-      if (!mapData) return [];
-      const pathTiles: { lx: number; ly: number }[] = [];
-      const otherTiles: { lx: number; ly: number }[] = [];
-      for (let ly = 0; ly < mapHeight; ly++) {
-        for (let lx = minX; lx <= maxX; lx++) {
-          if (isSpawnBlockedTile(mapData[ly]?.[lx])) continue;
-          if (mapData[ly]?.[lx] === TerrainType.PATH) pathTiles.push({ lx, ly });
-          else otherTiles.push({ lx, ly });
+    const getRandomSpawn = (faction: FactionId): { lx: number; ly: number } | null => {
+      if (cities.length > 0 && battleType === 'defensive') {
+        const pool = getCityPool().filter(t =>
+          !usedTiles.has(`${t.lx},${t.ly}`) && isValidSpawn(t.lx, t.ly)
+        );
+        if (pool.length > 0) {
+          const tile = pool[Math.floor(Math.random() * pool.length)];
+          return tile;
         }
       }
-      return pathTiles.length > 0 ? pathTiles : otherTiles;
-    };
-
-    const EDGE_X_PLAYER = Math.floor(mapWidth * 0.2);       // x ≤ 9
-    const EDGE_X_ENEMY  = Math.floor(mapWidth * 0.8);       // x ≥ 40
-
-    // 수비전: 아군→거점 주변, 적군→우측 가장자리
-    // 공격전: 아군→좌측 가장자리(PATH 우선), 적군→거점 주변
-    const playerPool = battleType === 'defensive'
-      ? getCityPool()
-      : getEdgePool(0, EDGE_X_PLAYER);
-
-    const enemyPool = battleType === 'defensive'
-      ? getEdgePool(EDGE_X_ENEMY, mapWidth - 1)
-      : getCityPool();
-
-    // ── 풀에서 랜덤 픽업 (이미 사용된 타일 제외) ─────────────────────────
-    const pickFrom = (
-      pool: { lx: number; ly: number }[],
-    ): { lx: number; ly: number } => {
-      const available = pool.filter(p => !usedTiles.has(`${p.lx},${p.ly}`));
-      if (available.length > 0) {
-        return available[Math.floor(Math.random() * available.length)];
+      // Faction-based spawn zone (해당 팩션이 공격자냐 방어자냐에 따라 구분)
+      const xMin = faction === attacker ? 0 : Math.floor(mapWidth * 0.6);
+      const xMax = faction === attacker ? Math.floor(mapWidth * 0.4) : mapWidth - 1;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const lx = Math.floor(Math.random() * (xMax - xMin + 1)) + xMin;
+        const ly = Math.floor(Math.random() * mapHeight);
+        if (isValidSpawn(lx, ly)) return { lx, ly };
       }
-      // 풀 소진 시 fallback: 맵 전체 랜덤
-      let lx = 0, ly = 0, attempts = 0;
-      do {
-        lx = Math.floor(Math.random() * mapWidth);
-        ly = Math.floor(Math.random() * mapHeight);
-        if (++attempts > 1000) break;
-      } while (!isValidSpawn(lx, ly));
-      return { lx, ly };
+      return null;
     };
 
-    for (let i = 0; i < UNIT_CONFIG.INITIAL_SPAWN_COUNT; i++) {
-      const isHero   = i < UNIT_CONFIG.HERO_UNIT_COUNT;
-      const type     = getRandomType();
-      const faction  = getFactionByIndex(i);
-      const stats    = BASE_STATS[type];
-      const isPlayer = faction === 'western_empire';
+    // 일반 병종 스폰
+    const totalUnits = UNIT_CONFIG.PLAYER_UNIT_COUNT + (UNIT_CONFIG.INITIAL_SPAWN_COUNT - UNIT_CONFIG.PLAYER_UNIT_COUNT);
+    for (let i = 0; i < totalUnits; i++) {
+      const faction = getFactionByIndex(i, attacker, defender);
+      const type = getRandomType();
+      const stats = BASE_STATS[type];
+      if (!stats) continue;
+      const isHero = i < UNIT_CONFIG.HERO_UNIT_COUNT || (i >= UNIT_CONFIG.PLAYER_UNIT_COUNT && i < UNIT_CONFIG.PLAYER_UNIT_COUNT + UNIT_CONFIG.HERO_UNIT_COUNT);
 
-      const { lx, ly } = pickFrom(isPlayer ? playerPool : enemyPool);
+      const spawn = getRandomSpawn(faction);
+      if (!spawn) continue;
+      const { lx, ly } = spawn;
       usedTiles.add(`${lx},${ly}`);
-
       const px = tileToPixel(lx);
       const py = tileToPixel(ly);
+
       newUnits[`unit-${i}`] = {
         id: `unit-${i}`,
-        factionId:   faction,
-        unitType:    type,
-        hp:          stats.hp     * (isHero ? 2   : 1),
-        maxHp:       stats.hp     * (isHero ? 2   : 1),
-        attack:      stats.attack * (isHero ? 1.5 : 1),
-        defense:     stats.defense,
-        speed:       stats.speed,
+        factionId: faction,
+        unitType: type,
+        hp: stats.hp * (isHero ? 2 : 1),
+        maxHp: stats.hp * (isHero ? 2 : 1),
+        attack: stats.attack * (isHero ? 1.5 : 1),
+        defense: stats.defense,
+        speed: stats.speed,
         attackRange: stats.attackRange,
-        state:       'IDLE',
-        hasActed:    false,
+        ct: Math.floor(Math.random() * 50), // 초기 CT 무작위 (선제 불균형 방지)
+        state: 'IDLE',
         logicalX: lx, logicalY: ly,
         x: px, y: py,
         targetX: px, targetY: py,
@@ -287,7 +340,49 @@ export const useGameStore = create<GameState>((set, get) => ({
         isHero,
       };
     }
+
+    // 장수(General) 스폰 (세력당 2명)
+    const factions: FactionId[] = ['western_empire', 'eastern_alliance'];
+    let genIdx = totalUnits;
+    for (const faction of factions) {
+      for (let g = 0; g < 2; g++) {
+        const spawn = getRandomSpawn(faction);
+        if (!spawn) continue;
+        const { lx, ly } = spawn;
+        usedTiles.add(`${lx},${ly}`);
+        const px = tileToPixel(lx);
+        const py = tileToPixel(ly);
+        const genStats = GENERAL_INITIAL_STATS[g === 0 ? 'senior' : 'junior'];
+
+        newUnits[`general-${faction}-${g}`] = {
+          id: `general-${faction}-${g}`,
+          factionId: faction,
+          unitType: 'GENERAL',
+          hp: BASE_STATS.GENERAL.hp,
+          maxHp: BASE_STATS.GENERAL.hp,
+          attack: BASE_STATS.GENERAL.attack,
+          defense: BASE_STATS.GENERAL.defense,
+          speed: BASE_STATS.GENERAL.speed,
+          attackRange: BASE_STATS.GENERAL.attackRange,
+          ct: Math.floor(Math.random() * 30),
+          state: 'IDLE',
+          logicalX: lx, logicalY: ly,
+          x: px, y: py,
+          targetX: px, targetY: py,
+          movePath: [],
+          isHero: true,
+          generalStrength:     genStats.strength,
+          generalIntelligence: genStats.intelligence,
+          generalPolitics:     genStats.politics,
+          generalCharisma:     genStats.charisma,
+        };
+        genIdx++;
+      }
+    }
+
     set({ units: newUnits });
+    // CT 계산 시작
+    setTimeout(() => _advanceTurn(set, get), 300);
   },
 
   // ─── 유닛 선택 ──────────────────────────────────────────────────────────
@@ -297,19 +392,19 @@ export const useGameStore = create<GameState>((set, get) => ({
       set({ selectedUnitId: null, moveRangeTiles: new Set(), hoveredMoveTile: null, previewPath: [], confirmedDestination: null, confirmedPath: [] });
       return;
     }
+    // 클릭으로 타 유닛 선택 시: hoveredUnitId만 업데이트 (이미 activeUnitId 자동 선택)
+    // activeUnitId인 경우에만 실제 선택 처리
     const unit = s.units[id];
     if (!unit || unit.factionId !== 'western_empire') return;
-    if (unit.state !== 'IDLE') return;
-    if (unit.hasActed) return; // 이번 턴 이미 행동함
+    if (s.activeUnitId !== id) return; // 행동권이 없는 유닛은 이동 범위 못 봄
 
     if (!s.mapData) return;
     const { friendlyTiles, enemyTiles } = buildTileSets(s.units, id);
     const range = calcMoveRange(
       unit.logicalX, unit.logicalY, unit.speed,
-      s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT,
-      friendlyTiles, enemyTiles,
+      s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
     );
-    set({ selectedUnitId: id, moveRangeTiles: range, hoveredMoveTile: null, previewPath: [], confirmedDestination: null, confirmedPath: [] });
+    set({ selectedUnitId: id, moveRangeTiles: range, confirmedDestination: null, confirmedPath: [], hoveredMoveTile: null, previewPath: [] });
   },
 
   // ─── 호버 경로 미리보기 ─────────────────────────────────────────────────
@@ -337,7 +432,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     const unit = s.units[s.selectedUnitId];
     if (!unit) return;
 
-    // 현재 유닛 위치인 경우: moveRangeTiles 체크 우회 (제자리 행동)
     const isCurrentTile = unit.logicalX === lx && unit.logicalY === ly;
     if (!isCurrentTile && !s.moveRangeTiles.has(`${lx},${ly}`)) return;
 
@@ -345,7 +439,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!path.length || path[path.length - 1].lx !== lx || path[path.length - 1].ly !== ly) {
       const { friendlyTiles, enemyTiles } = buildTileSets(s.units, s.selectedUnitId);
       path = isCurrentTile
-        ? [{ lx, ly }]  // 제자리: 한 칸짜리 경로
+        ? [{ lx, ly }]
         : findMovePath(
             unit.logicalX, unit.logicalY, lx, ly, unit.speed,
             s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
@@ -372,46 +466,64 @@ export const useGameStore = create<GameState>((set, get) => ({
     const py = tileToPixel(dest.ly);
     const waypoints = confirmedPath.slice(1);
 
-    if (action === 'ATTACK') {
-      // 이동 후 공격: 이동을 먼저 처리하고, 이동 완료 시점에 공격을 해야 함
-      // 여기서는 공격 가능 적군 목록을 선택해야 하지만
-      // 단순화: 이동 완료 후 범위 내 첫 번째 적군을 자동 공격
-      const targets = getAttackableTargets(unit, units, dest.lx, dest.ly);
-      const target = targets[0];
-      if (!target) {
-        // 공격 대상 없음 → 그냥 대기처럼 이동만
-        _moveThenAct(set, s, selectedUnitId, unit, dest, px, py, waypoints, null);
-      } else {
-        _moveThenAct(set, s, selectedUnitId, unit, dest, px, py, waypoints, target.id);
-      }
-    } else {
-      // WAIT / SKILL / ITEM: 이동 후 행동 완료
-      _moveThenAct(set, s, selectedUnitId, unit, dest, px, py, waypoints, null);
-    }
+    // WAIT / SKILL / ITEM → 이동만 하고 턴 종료
+    _moveThenAct(set, s, selectedUnitId, unit, dest, px, py, waypoints, null);
   },
 
-  // ─── 플레이어 턴 종료 ────────────────────────────────────────────────────
-  endPlayerTurn: () => {
+  // ─── 유닛 턴 종료 (CT 차감 → 다음 유닛 계산) ────────────────────────────
+  endUnitTurn: () => {
     const s = get();
+    const { activeUnitId, units } = s;
+    if (!activeUnitId) return;
+    const unit = units[activeUnitId];
+    if (!unit) return;
+
+    // CT 차감 (행동 완료)
+    const newCt = Math.max(0, unit.ct - CT_THRESHOLD);
     set({
-      currentTurn: 'enemy',
-      units: Object.fromEntries(
-        Object.entries(s.units).map(([id, u]) => [id, { ...u, state: u.state === 'DEAD' ? 'DEAD' as const : 'IDLE' as const }])
-      ),
+      activeUnitId: null,
       selectedUnitId: null,
       moveRangeTiles: new Set(),
-      hoveredMoveTile: null,
-      previewPath: [],
       confirmedDestination: null,
       confirmedPath: [],
+      attackTargetMode: false,
+      turnNumber: s.turnNumber + 1,
+      units: { ...units, [activeUnitId]: { ...unit, ct: newCt, state: unit.state === 'DEAD' ? 'DEAD' : 'IDLE' } },
     });
 
-    // 적 AI 실행
-    setTimeout(() => runEnemyAI(get, set), 500);
+    setTimeout(() => _advanceTurn(set, get), 200);
   },
 }));
 
-// ─── 이동 후 행동 헬퍼 (bump 애니메이션 + 공격 포함) ─────────────────────────
+// ─── CT 이니셔티브: 다음 행동 유닛 결정 ──────────────────────────────────────
+function _advanceTurn(
+  set: (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void,
+  get: () => GameState,
+) {
+  const s = get();
+  const { updatedUnits, activeId } = _calcNextActive(s.units);
+
+  if (!activeId) return; // 유닛 없음
+
+  const activeUnit = updatedUnits[activeId];
+  set({ units: updatedUnits, activeUnitId: activeId });
+
+  if (activeUnit.factionId === 'western_empire') {
+    // 플레이어 유닛: 자동 선택 + 이동 범위 표시
+    if (!s.mapData) return;
+    const { friendlyTiles, enemyTiles } = buildTileSets(updatedUnits, activeId);
+    const range = calcMoveRange(
+      activeUnit.logicalX, activeUnit.logicalY, activeUnit.speed,
+      s.mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
+    );
+    set({ selectedUnitId: activeId, moveRangeTiles: range });
+  } else {
+    // 적 유닛: AI 실행
+    setTimeout(() => _runSingleEnemyAI(set, get, activeId), 400);
+  }
+}
+
+// ─── 이동 후 행동 헬퍼 (bump 애니메이션 포함) ──────────────────────────────────
 function _moveThenAct(
   set: (partial: Partial<GameState>) => void,
   s: GameState,
@@ -441,27 +553,33 @@ function _moveThenAct(
         targetX: px,
         targetY: py,
         state: 'MOVING',
-        hasActed: true,
         movePath: waypoints,
       },
     },
   });
 
-  if (!attackTargetId) return;
-
-  // 이동 완료 후: bump → recoil → 데미지 해결 (3단계)
+  // 이동 완료 후 처리
   setTimeout(() => {
+    if (!attackTargetId) {
+      // 공격 없음 → 턴 종료
+      useGameStore.getState().endUnitTurn();
+      return;
+    }
+
     const cur = useGameStore.getState();
     const atk = cur.units[selfId];
     const def = cur.units[attackTargetId];
-    if (!atk || !def || def.state === 'DEAD') return;
+    if (!atk || !def || def.state === 'DEAD') {
+      useGameStore.getState().endUnitTurn();
+      return;
+    }
 
     const dx = tileToPixel(def.logicalX) - px;
     const dy = tileToPixel(def.logicalY) - py;
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
     const BUMP = 18;
 
-    // 단계 1: ATTACKING 상태 + bump 위치
+    // 단계 1: ATTACKING + bump
     useGameStore.setState(s2 => ({
       units: {
         ...s2.units,
@@ -474,30 +592,36 @@ function _moveThenAct(
       },
     }));
 
-    // 단계 2: 220ms 후 recoil (원래 위치 복귀)
+    // 단계 2: recoil
     setTimeout(() => {
       useGameStore.setState(s2 => ({
-        units: {
-          ...s2.units,
-          [selfId]: { ...s2.units[selfId], targetX: px, targetY: py },
-        },
+        units: { ...s2.units, [selfId]: { ...s2.units[selfId], targetX: px, targetY: py } },
       }));
     }, 220);
 
-    // 단계 3: 450ms 후 데미지 해결
+    // 단계 3: 데미지 해결 + 턴 종료
     setTimeout(() => {
       const cur2 = useGameStore.getState();
       const a2 = cur2.units[selfId];
       const d2 = cur2.units[attackTargetId];
-      if (!a2 || !d2 || d2.state === 'DEAD') return;
-      _resolveAttack(a2, d2, selfId, attackTargetId);
+      if (!a2 || !d2 || d2.state === 'DEAD') {
+        useGameStore.getState().endUnitTurn();
+        return;
+      }
+      _resolveAttack(a2, d2, selfId, attackTargetId, cur2.units);
     }, 450);
   }, MOVE_MS);
 }
 
-// ─── 전투 해결 + 플로팅 데미지 ──────────────────────────────────────────────
-function _resolveAttack(attacker: Unit, defender: Unit, attackerId: string, defenderId: string) {
-  const dmg = calcDamage(attacker, defender);
+// ─── 전투 해결 + 플로팅 데미지 + 턴 종료 ───────────────────────────────────────
+function _resolveAttack(
+  attacker: Unit,
+  defender: Unit,
+  attackerId: string,
+  defenderId: string,
+  allUnits: Record<string, Unit>,
+) {
+  const dmg = calcDamage(attacker, defender, allUnits);
   const newHp = Math.max(0, defender.hp - dmg);
   const isDead = newHp <= 0;
   const isCrit = dmg >= attacker.attack * 0.95;
@@ -513,146 +637,102 @@ function _resolveAttack(attacker: Unit, defender: Unit, attackerId: string, defe
     combatLog: [log, ...s.combatLog].slice(0, 8),
     floatingDamages: [
       ...s.floatingDamages,
-      {
-        id: floatId,
-        x: tileToPixel(defender.logicalX),
-        y: tileToPixel(defender.logicalY) - 10,
-        value: dmg,
-        isCrit,
-      },
+      { id: floatId, x: tileToPixel(defender.logicalX), y: tileToPixel(defender.logicalY) - 10, value: dmg, isCrit },
     ],
   }));
+
+  // 공격 후 턴 종료
+  setTimeout(() => useGameStore.getState().endUnitTurn(), 300);
 }
 
-
-// ─── 적 AI ──────────────────────────────────────────────────────────────────
-async function runEnemyAI(
-  get: () => GameState,
+// ─── 단일 적 AI ───────────────────────────────────────────────────────────────
+async function _runSingleEnemyAI(
   set: (partial: Partial<GameState> | ((s: GameState) => Partial<GameState>)) => void,
+  get: () => GameState,
+  enemyId: string,
 ) {
-  const enemyIds = Object.keys(get().units).filter(
-    id => {
-      const u = get().units[id];
-      return u.factionId === 'eastern_alliance' && u.state !== 'DEAD';
-    }
-  );
+  await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
 
-  // 셔플 (랜덤 순서)
-  enemyIds.sort(() => Math.random() - 0.5);
-
-  for (const eid of enemyIds) {
-    await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
-
-    const state = get();
-    if (state.currentTurn !== 'enemy') break;
-
-    const enemy = state.units[eid];
-    if (!enemy || enemy.state === 'DEAD') continue;
-
-    const { mapData } = state;
-    if (!mapData) continue;
-
-    // 아군 유닛 목록 (살아있는)
-    const playerUnits = Object.values(state.units).filter(
-      u => u.factionId === 'western_empire' && u.state !== 'DEAD',
-    );
-    if (playerUnits.length === 0) break;
-
-    // 가장 가까운 아군 탐색 (체비쇼프 거리)
-    playerUnits.sort((a, b) =>
-      chebyshevDist(enemy.logicalX, enemy.logicalY, a.logicalX, a.logicalY) -
-      chebyshevDist(enemy.logicalX, enemy.logicalY, b.logicalX, b.logicalY)
-    );
-    const nearest = playerUnits[0];
-
-    const { friendlyTiles, enemyTiles } = buildTileSets(state.units, eid);
-    const range = calcMoveRange(
-      enemy.logicalX, enemy.logicalY, enemy.speed,
-      mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT,
-      friendlyTiles, enemyTiles,
-    );
-
-    // 이동 범위 안에서 nearest에 가장 가까운 타일 선택
-    let bestTile: { lx: number; ly: number } | null = null;
-    let bestDist = Infinity;
-
-    // 먼저 현재 위치도 후보로 포함
-    const candidates: string[] = [
-      ...Array.from(range),
-      `${enemy.logicalX},${enemy.logicalY}`,
-    ];
-
-    for (const key of candidates) {
-      const [lx, ly] = key.split(',').map(Number);
-      const dist = chebyshevDist(lx, ly, nearest.logicalX, nearest.logicalY);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestTile = { lx, ly };
-      }
-    }
-
-    if (!bestTile) continue;
-
-    // 경로 계산
-    const path = findMovePath(
-      enemy.logicalX, enemy.logicalY,
-      bestTile.lx, bestTile.ly,
-      enemy.speed, mapData,
-      MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT,
-      friendlyTiles, enemyTiles,
-    );
-
-    const dest = bestTile;
-    const px = tileToPixel(dest.lx);
-    const py = tileToPixel(dest.ly);
-    const waypoints = path.slice(1);
-
-    // 이동 가능 여부 확인 (range에 있거나 현재 위치)
-    const canMove = range.has(`${dest.lx},${dest.ly}`) ||
-      (dest.lx === enemy.logicalX && dest.ly === enemy.logicalY);
-    if (!canMove) continue;
-
-    set(s => ({
-      units: {
-        ...s.units,
-        [eid]: {
-          ...s.units[eid],
-          logicalX: dest.lx,
-          logicalY: dest.ly,
-          targetX: px,
-          targetY: py,
-          state: waypoints.length > 0 ? 'MOVING' : 'IDLE',
-          hasActed: true,
-          movePath: waypoints,
-        },
-      },
-    }));
-
-    // 이동 완료 후 공격 체크
-    const animMs = waypoints.length * 150 + 50;
-    await new Promise(r => setTimeout(r, animMs + 100));
-
-    const afterMove = get();
-    const afterEnemy = afterMove.units[eid];
-    if (!afterEnemy || afterEnemy.state === 'DEAD') continue;
-
-    const targets = getAttackableTargets(afterEnemy, afterMove.units, dest.lx, dest.ly);
-    if (targets.length > 0) {
-      _resolveAttack(afterEnemy, targets[0], eid, targets[0].id);
-      await new Promise(r => setTimeout(r, 200));
-    }
+  const state = get();
+  const enemy = state.units[enemyId];
+  if (!enemy || enemy.state === 'DEAD') {
+    get().endUnitTurn();
+    return;
   }
 
-  // 적 턴 완료 → player 턴으로 전환 (아군 hasActed 초기화)
-  await new Promise(r => setTimeout(r, 300));
+  const { mapData } = state;
+  if (!mapData) { get().endUnitTurn(); return; }
+
+  const playerUnits = Object.values(state.units).filter(
+    u => u.factionId === 'western_empire' && u.state !== 'DEAD',
+  );
+  if (playerUnits.length === 0) { get().endUnitTurn(); return; }
+
+  // 가장 가까운 아군 선택
+  playerUnits.sort((a, b) =>
+    chebyshevDist(enemy.logicalX, enemy.logicalY, a.logicalX, a.logicalY) -
+    chebyshevDist(enemy.logicalX, enemy.logicalY, b.logicalX, b.logicalY)
+  );
+  const nearest = playerUnits[0];
+
+  const { friendlyTiles, enemyTiles } = buildTileSets(state.units, enemyId);
+  const range = calcMoveRange(
+    enemy.logicalX, enemy.logicalY, enemy.speed,
+    mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
+  );
+
+  // 이동 범위 내에서 가장 가까운 타일 선택
+  let bestTile: { lx: number; ly: number } = { lx: enemy.logicalX, ly: enemy.logicalY };
+  let bestDist = chebyshevDist(enemy.logicalX, enemy.logicalY, nearest.logicalX, nearest.logicalY);
+
+  for (const key of range) {
+    const [lx, ly] = key.split(',').map(Number);
+    const dist = chebyshevDist(lx, ly, nearest.logicalX, nearest.logicalY);
+    if (dist < bestDist) { bestDist = dist; bestTile = { lx, ly }; }
+  }
+
+  const dest = bestTile;
+  const px = tileToPixel(dest.lx);
+  const py = tileToPixel(dest.ly);
+  const path = findMovePath(
+    enemy.logicalX, enemy.logicalY, dest.lx, dest.ly, enemy.speed,
+    mapData, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, friendlyTiles, enemyTiles,
+  );
+  const waypoints = path.slice(1);
+
+  // 이동
   set(s => ({
-    currentTurn: 'player',
-    turnNumber: s.turnNumber + 1,
-    units: Object.fromEntries(
-      Object.entries(s.units).map(([id, u]) => [
-        id,
-        { ...u, hasActed: false, state: u.state === 'DEAD' ? 'DEAD' as const : 'IDLE' as const },
-      ])
-    ),
+    units: {
+      ...s.units,
+      [enemyId]: {
+        ...s.units[enemyId],
+        logicalX: dest.lx, logicalY: dest.ly,
+        targetX: px, targetY: py,
+        state: waypoints.length > 0 ? 'MOVING' : 'IDLE',
+        movePath: waypoints,
+      },
+    },
   }));
+
+  // 이동 완료 대기
+  const animMs = waypoints.length * 150 + 50;
+  await new Promise(r => setTimeout(r, animMs + 100));
+
+  // 공격 체크
+  const afterMove = get();
+  const afterEnemy = afterMove.units[enemyId];
+  if (!afterEnemy || afterEnemy.state === 'DEAD') {
+    get().endUnitTurn();
+    return;
+  }
+
+  const targets = getAttackableTargets(afterEnemy, afterMove.units, dest.lx, dest.ly);
+  if (targets.length > 0) {
+    // 가장 HP가 낮은 적 우선 공격
+    targets.sort((a, b) => a.hp - b.hp);
+    _resolveAttack(afterEnemy, targets[0], enemyId, targets[0].id, afterMove.units);
+    // _resolveAttack 내부에서 endUnitTurn 호출됨
+  } else {
+    get().endUnitTurn();
+  }
 }

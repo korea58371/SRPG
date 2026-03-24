@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { FACTIONS } from '../constants/gameConfig';
+import { FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
 import { UNIT_ICONS } from '../utils/unitTextures';
 
 const UNIT_TYPE_KR: Record<string, string> = {
@@ -31,6 +31,7 @@ export default function UnitInfoPanel() {
 
   const selectedUnitId = useGameStore(s => s.selectedUnitId);
   const hoveredUnitId  = useGameStore(s => s.hoveredUnitId);
+  const activeUnitId   = useGameStore(s => s.activeUnitId);
   const units          = useGameStore(s => s.units);
 
   const displayId = selectedUnitId ?? hoveredUnitId;
@@ -40,16 +41,17 @@ export default function UnitInfoPanel() {
   if (!unit || unit.state === 'DEAD') return null;
 
   const faction   = FACTIONS[unit.factionId];
-  const isPlayer  = unit.factionId === 'western_empire';
+  const isPlayer  = unit.factionId === PLAYER_FACTION;
   const icon      = UNIT_ICONS[unit.unitType] ?? '?';
   const name      = UNIT_TYPE_KR[unit.unitType] ?? unit.unitType;
-  const borderCls = isPlayer ? 'border-blue-500' : 'border-red-500';
+  // 번호 형태의 색상을 CSS HEX로 변환
+  const hexColor  = typeof faction.color === 'number' ? '#' + faction.color.toString(16).padStart(6, '0') : '#fff';
   const accentCls = isPlayer ? 'text-blue-300' : 'text-red-300';
 
   return (
     <div className="absolute bottom-16 left-4 z-40 pointer-events-none select-none">
-      <div className={`bg-gray-900/95 border ${borderCls} rounded-xl shadow-2xl backdrop-blur-sm overflow-hidden`}
-           style={{ minWidth: 240, maxWidth: 300 }}>
+      <div className={`bg-gray-900/95 border rounded-xl shadow-2xl backdrop-blur-sm overflow-hidden`}
+           style={{ minWidth: 240, maxWidth: 300, borderColor: hexColor }}>
 
         {/* ─ 컴팩트 바 (항상 표시) ─ */}
         <div className="flex items-center gap-3 px-3 py-2">
@@ -96,9 +98,18 @@ export default function UnitInfoPanel() {
 
             {/* 상태 배지 */}
             <div className="flex gap-1.5 mt-2 flex-wrap">
-              {unit.hasActed && <span className="text-[10px] bg-gray-700 text-gray-400 rounded px-1.5 py-0.5">행동완료</span>}
-              {unit.isHero   && <span className="text-[10px] bg-yellow-900/50 text-yellow-400 rounded px-1.5 py-0.5">👑 지휘관</span>}
+              {activeUnitId === displayId && <span className="text-[10px] bg-yellow-700/60 text-yellow-300 rounded px-1.5 py-0.5">⚡ 행동 중</span>}
+              {unit.isHero   && <span className="text-[10px] bg-yellow-900/50 text-yellow-400 rounded px-1.5 py-0.5">{unit.unitType === 'GENERAL' ? '👑 장수' : '👑 지휘관'}</span>}
               {selectedUnitId === displayId && <span className={`text-[10px] bg-blue-900/50 ${accentCls} rounded px-1.5 py-0.5`}>선택됨</span>}
+              {/* 장수 능력치 표시 */}
+              {unit.unitType === 'GENERAL' && (
+                <div className="flex gap-1 flex-wrap mt-1">
+                  <span className="text-[9px] bg-orange-900/40 text-orange-300 rounded px-1 py-0.5">武{unit.generalStrength}</span>
+                  <span className="text-[9px] bg-purple-900/40 text-purple-300 rounded px-1 py-0.5">知{unit.generalIntelligence}</span>
+                  <span className="text-[9px] bg-green-900/40 text-green-300 rounded px-1 py-0.5">政{unit.generalPolitics}</span>
+                  <span className="text-[9px] bg-blue-900/40 text-blue-300 rounded px-1 py-0.5">統{unit.generalCharisma}타일</span>
+                </div>
+              )}
             </div>
           </div>
         )}

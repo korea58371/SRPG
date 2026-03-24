@@ -12,7 +12,7 @@ import { useRef } from 'react';
 import { Container, Sprite, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { useShallow } from 'zustand/react/shallow';
-import { UNIT_CONFIG, FACTIONS } from '../constants/gameConfig';
+import { UNIT_CONFIG, FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
 import { useGameStore, tileToPixel } from '../store/gameStore';
 import { getUnitTypeTexture } from '../utils/unitTextures';
 
@@ -91,8 +91,11 @@ function UnitSprite({ id }: { id: string }) {
   if (!unit || unit.state === 'DEAD') return null;
 
   const isSelected = selectedUnitId === id;
-  const color = FACTIONS[unit.factionId].color;
-  const alpha = unit.hasActed ? 0.4 : 1.0;
+  const color = FACTIONS[unit.factionId]?.color ?? 0xaaaaaa;
+  const isActive  = useGameStore(s => s.activeUnitId) === id;
+  const alpha = (unit.factionId === PLAYER_FACTION && !isActive && useGameStore.getState().activeUnitId !== null)
+    ? 0.55  // 아군이지만 현재 행동권 없을 때 살짝 어둡게
+    : 1.0;
   const iconTexture = getUnitTypeTexture(unit.unitType);
 
   // 선택된 유닛은 흰색 외곽선(배경을 흰색으로)
@@ -106,7 +109,7 @@ function UnitSprite({ id }: { id: string }) {
       alpha={alpha}
       zIndex={unit.y}
       eventMode="static"
-      cursor={unit.hasActed && !useGameStore.getState().attackTargetMode ? 'default' : 'pointer'}
+      cursor={isActive ? 'pointer' : 'default'}
       onpointerenter={() => setHoveredUnit(id)}
       onpointerleave={() => setHoveredUnit(null)}
       onclick={() => {
@@ -131,7 +134,7 @@ function UnitSprite({ id }: { id: string }) {
         if (state.selectedUnitId === id) {
           // 이미 선택된 유닛 재클릭 → 제자리 행동 메뉴
           const u = state.units[id];
-          if (u && !u.hasActed) state.confirmMove(u.logicalX, u.logicalY);
+          if (u && state.activeUnitId === id) state.confirmMove(u.logicalX, u.logicalY);
           return;
         }
         selectUnit(id);

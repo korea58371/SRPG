@@ -4,9 +4,9 @@ import { TerrainType } from '../types/gameTypes';
 
 // 맵 및 타일 관련 설정
 export const MAP_CONFIG = {
-  TILE_SIZE: 40,
-  WIDTH: 50,
-  HEIGHT: 30,
+  TILE_SIZE: 24,
+  WIDTH: 84,
+  HEIGHT: 50,
   NOISE_SCALE: 15,
 };
 
@@ -33,10 +33,26 @@ export const ENVIRONMENT_CONFIG = {
 // 전투 및 시스템 데이터 속성 (기획 반영)
 // ============================================
 
-export const FACTIONS = {
-  western_empire: { id: 'western_empire', name: '서양 판타지 제국', color: 0x3b82f6 }, // 파란색 계열
-  eastern_alliance: { id: 'eastern_alliance', name: '동양 연합국', color: 0xef4444 },   // 붉은색 계열
-  neutral: { id: 'neutral', name: '중립/몬스터', color: 0x22c55e },                // 초록색 계열
+// 플레이어가 조종하는 기본 세력 ID
+export const PLAYER_FACTION = 'faction_01';
+
+// 군웅할거: 15개의 다중 세력 기반 메타데이터 (색상, 고유 명칭)
+export const FACTIONS: Record<string, { id: string, name: string, color: number }> = {
+  faction_01: { id: 'faction_01', name: '아스칼론 제국', color: 0x3b82f6 }, // 파랑
+  faction_02: { id: 'faction_02', name: '신성 로마 제국', color: 0xef4444 }, // 빨강
+  faction_03: { id: 'faction_03', name: '요르비키아 신국', color: 0x22c55e }, // 초록
+  faction_04: { id: 'faction_04', name: '카른부르크 왕국', color: 0xeab308 }, // 노랑
+  faction_05: { id: 'faction_05', name: '페니시아 연방', color: 0xa855f7 }, // 보라
+  faction_06: { id: 'faction_06', name: '오리오노스 연방', color: 0x06b6d4 }, // 시안 (하늘)
+  faction_07: { id: 'faction_07', name: '드래곤스파이어 공국', color: 0xf97316 }, // 주황
+  faction_08: { id: 'faction_08', name: '수플론 제국', color: 0xec4899 }, // 핑크
+  faction_09: { id: 'faction_09', name: '바르칸디아 왕국', color: 0x8b5cf6 }, // 청보라
+  faction_10: { id: 'faction_10', name: '게스테벤 신권국', color: 0x14b8a6 }, // 청록
+  faction_11: { id: 'faction_11', name: '폰티외브리 연방', color: 0x64748b }, // 슬레이트 (회파랑)
+  faction_12: { id: 'faction_12', name: '디트마르센 공화국', color: 0xf43f5e }, // 로즈 (진홍)
+  faction_13: { id: 'faction_13', name: '요크렌디아 왕국', color: 0x84cc16 }, // 라임 (연두)
+  faction_14: { id: 'faction_14', name: '에스키스텐 연방', color: 0xd946ef }, // 푸시아 (자홍)
+  faction_15: { id: 'faction_15', name: '순드가우비아 기사단', color: 0x6366f1 }, // 인디고 (남색)
 };
 
 // 지형 특수 효과: 방어력 증감(%), 타일 이동시 소비되는 페널티 수치 비율
@@ -58,8 +74,19 @@ export const UNIT_MATCHUPS = {
 };
 
 export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number }> = {
-  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 3, attackRange: 1 },
-  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 2.5, attackRange: 2 }, // 스피어: 사셀 2
-  CAVALRY: { hp: 80, attack: 20, defense: 8, speed: 4, attackRange: 1 },
-  ARCHER: { hp: 60, attack: 18, defense: 5, speed: 3, attackRange: 3 }, // 궁병: 사셠 3
+  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 3,   attackRange: 1 },
+  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 2.5, attackRange: 2 },
+  CAVALRY:  { hp:  80, attack: 20, defense:  8, speed: 4,   attackRange: 1 },
+  ARCHER:   { hp:  60, attack: 18, defense:  5, speed: 3,   attackRange: 3 },
+  GENERAL:  { hp:  80, attack: 10, defense: 12, speed: 2.5, attackRange: 1 }, // 장수: 낙은 화력, 높은 학실
+};
+
+// ─ CT(Charge Time) 시스템 ─────────────────────────────────────────
+export const CT_THRESHOLD = 100; // CT 가 이 값 이상이면 행동권 획득
+
+// 장수(General) 초기 능력치
+// strength(武力) → 화관 atk+, intelligence(知力) → def+, politics(政治) → HP+, charisma(統率) → 버프 반경
+export const GENERAL_INITIAL_STATS = {
+  senior: { strength: 40, intelligence: 35, politics: 30, charisma: 5 }, // 주장國
+  junior: { strength: 25, intelligence: 20, politics: 25, charisma: 4 }, // 부장國
 };
