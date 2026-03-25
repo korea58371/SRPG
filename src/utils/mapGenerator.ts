@@ -1,5 +1,7 @@
 import { createNoise2D } from 'simplex-noise';
 import { TerrainType } from '../types/gameTypes';
+import type { MapObjectData } from '../types/gameTypes';
+import { MAP_CONFIG, getTileDarkness } from '../constants/gameConfig';
 
 interface Point { x: number; y: number; }
 
@@ -10,11 +12,10 @@ interface TerrainProfile {
   name: string;
   label: string;
   noiseScale: number;
-  seaLevel:    number;  // 이하 → SEA
-  beachLevel:  number;  // 이하 → BEACH
-  grassLevel:  number;  // 이하 → GRASS
-  forestLevel: number;  // 이하 → FOREST
-                        // 초과 → CLIFF
+  seaLevel:    number;
+  beachLevel:  number;
+  grassLevel:  number;
+  forestLevel: number;
 }
 
 const TERRAIN_PROFILES: TerrainProfile[] = [
@@ -71,6 +72,7 @@ export interface MapInfo {
   label: string;
   terrainName: string;
   waterType: string;
+  terrainProfile: TerrainProfile;
 }
 
 // ─── fBm 노이즈 생성기 ────────────────────────────────────────────────────────
@@ -299,7 +301,7 @@ function placeEcologicalCities(
 export function generateMapData(
   width: number,
   height: number,
-): { map: TerrainType[][]; cities: Point[]; mapInfo: MapInfo } {
+): { map: TerrainType[][]; elevMap: number[][]; cities: Point[]; mapInfo: MapInfo; mapObjects: MapObjectData[] } {
   const terrain = TERRAIN_PROFILES[Math.floor(Math.random() * TERRAIN_PROFILES.length)];
   const water   = WATER_LAYOUTS[Math.floor(Math.random() * WATER_LAYOUTS.length)];
   const waterSide: WaterSide | null =
@@ -320,6 +322,9 @@ export function generateMapData(
   const elevMap: number[][] = Array.from({ length: height }, (_, y) =>
     Array.from({ length: width }, (_, x) => fbm(x, y)),
   );
+  
+  // 오브젝트 배치를 위한 팩터 (가변 그리드 동기화)
+  const T = MAP_CONFIG.TILE_SIZE;
 
   // STEP 2: 물 레이아웃 → 고도 조정
   // coastal: 가장자리 고도를 낮춰 해수면 아래로 → 바다
@@ -387,5 +392,147 @@ export function generateMapData(
     }
   }
 
-  return { map, cities, mapInfo: { label, terrainName: terrain.name, waterType: water.type } };
+  // STEP 6: 프롭(나무, 산 등) 오브젝트 생성
+  const mapObjects: MapObjectData[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const type = map[y][x];
+      const cx = x * T + T / 2;
+      const cy = y * T + T / 2;
+      
+      if (type === TerrainType.FOREST) {
+        // 숲 타일 당 1~3개의 나무 생성
+        const count = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < count; i++) {
+          const offsetX = (Math.random() - 0.5) * (T * 0.6);
+          const offsetY = (Math.random() - 0.5) * (T * 0.6);
+          mapObjects.push({
+            id: `tree_${x}_${y}_${i}`,
+            type: 'TREE',
+            lx: x, ly: y,
+            px: cx + offsetX,
+            py: cy + offsetY,
+          });
+        }
+      } else if (type === TerrainType.CLIFF) {
+        // 절벽 타일 당 높은 산(돌) 하나 생성
+        mapObjects.push({
+          id: `mountain_${x}_${y}`,
+          type: 'MOUNTAIN',
+          lx: x, ly: y,
+          px: cx, py: cy,
+        });
+      }
+    }
+  }
+
+  // 도시 타일 위에 집 오브젝트 생성 (STEP 4에서 만들어진 cities 배열 기반)
+  for (let i = 0; i < cities.length; i++) {
+    const c = cities[i];
+    mapObjects.push({
+      id: `house_${c.x}_${c.y}`,
+      type: 'HOUSE',
+      lx: c.x, ly: c.y,
+      px: c.x * T + T / 2,
+      py: c.y * T + T / 2,
+    });
+  }
+
+  return { map, elevMap, cities, mapInfo: { label, terrainName: terrain.name, waterType: water.type, terrainProfile: terrain }, mapObjects };
+}
+
+// ─── 부드러운 통짜 맵 텍스처 렌더링기 (단색 타일 버전) ──────────────────────
+// 사용자가 지정한 안개/외곽 장식을 생성하기 위한 함수
+// 타일과 같은 사이즈로 빈 캔버스를 만들고, 어두워지는 구역에만 alpha 값이 섞인 색상을 그립니다.
+export function generateFogTexture(
+  width: number,
+  height: number,
+  tileSize: number,
+): HTMLCanvasElement {
+  // 프롭들(Mountain 등 최대 높이 80px 이상)이 맵 바깥으로 렌더링되면서 안개에 잘리는(튀어나오는) 현상 방지.
+  // 실제 맵보다 상하좌우 6타일(144px)씩 확장하여 그립니다.
+  const padding = 6;
+  const canvas = document.createElement('canvas');
+  canvas.width = (width + padding * 2) * tileSize;
+  canvas.height = (height + padding * 2) * tileSize;
+  const ctx = canvas.getContext('2d', { alpha: true });
+  if (!ctx) return canvas;
+
+  // -padding 부터 width+padding 까지 루프
+  for (let y = -padding; y < height + padding; y++) {
+    for (let x = -padding; x < width + padding; x++) {
+      const darkness = getTileDarkness(x, y, width, height);
+      if (darkness > 0) {
+        ctx.fillStyle = `rgba(112, 113, 78, ${darkness})`;
+        const drawX = x + padding;
+        const drawY = y + padding;
+        // 그리드(격자) 아티팩트 원인 제거: 반투명 사각형이 겹치면 알파 채널이 더블링되므로, 오버랩 없이 정확하게 타일 사이즈로 그립니다.
+        ctx.fillRect(drawX * tileSize, drawY * tileSize, tileSize, tileSize);
+      }
+    }
+  }
+
+  return canvas;
+}
+
+// 사용자가 지정한 대로, 프랙탈 노이즈 없이 타일별 단색(Solid Color)으로 그려냅니다.
+export function generateMapTexture(
+  width: number,
+  height: number,
+  tileSize: number,
+  mapData: TerrainType[][],     // 로지컬 맵 (타일 색칠용)
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = width * tileSize;
+  canvas.height = height * tileSize;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) return canvas;
+
+  // 플랫/파스텔톤 팔레트
+  const PALETTE: Record<number, number[]> = {
+    [TerrainType.SEA]:    [107, 140, 206],
+    [TerrainType.BEACH]:  [211, 196, 163],
+    [TerrainType.GRASS]:  [172, 177, 123], // #acb17b
+    [TerrainType.FOREST]: [141, 151,  97], // #8d9761
+    [TerrainType.CLIFF]:  [136, 139, 119],
+    [TerrainType.PATH]:   [210, 208, 196], // #d2d0c4
+  };
+
+  // Base Pass: 각 타일을 단색 사각형으로 렌더링
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const type = mapData[y][x];
+      const baseColor = PALETTE[type] || PALETTE[TerrainType.GRASS];
+      ctx.fillStyle = `rgb(${baseColor.join(',')})`;
+      
+      // 약간의 겹침(비는 공간 방지)을 위해 크기를 1px 크게 칠함
+      ctx.fillRect(x * tileSize, y * tileSize, tileSize + 0.5, tileSize + 0.5);
+    }
+  }
+
+  // Path 렌더링: 블록형태가 아닌 타일 자체를 PATH 색상으로 칠함
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (mapData[y][x] === TerrainType.PATH) {
+        const baseColor = PALETTE[TerrainType.PATH];
+        ctx.fillStyle = `rgb(${baseColor.join(',')})`;
+        ctx.fillRect(x * tileSize, y * tileSize, tileSize + 0.5, tileSize + 0.5);
+      }
+    }
+  }
+
+  // 그리드 라인 오버레이 생략 (쿼터뷰 시 마름모꼴 자체가 그리드를 잘 보여줌)
+  // 그래도 연한 라인을 남기고 싶다면 주석 해제 가능
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.beginPath();
+  for (let x = 0; x <= canvas.width; x += tileSize) {
+    ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+  }
+  for (let y = 0; y <= canvas.height; y += tileSize) {
+    ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
+  }
+  ctx.stroke();
+
+  return canvas;
 }

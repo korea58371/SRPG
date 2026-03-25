@@ -9,16 +9,17 @@
 //   DEAD     → 미렌더링
 
 import { useRef } from 'react';
-import { Container, Sprite, useTick } from '@pixi/react';
+import { Container, Sprite, Text, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { useShallow } from 'zustand/react/shallow';
-import { UNIT_CONFIG, FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
+import { MAP_CONFIG, FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
 import { useGameStore, tileToPixel } from '../store/gameStore';
 import { getUnitTypeTexture } from '../utils/unitTextures';
 
 const MOVE_SPEED = 6;
-const W = UNIT_CONFIG.SIZE_NORMAL.width;
-const H = UNIT_CONFIG.SIZE_NORMAL.height;
+// W, H 변수는 더 이상 단위 픽셀 계산에 직접 쓰지 않으므로 주석 처리
+// const W = UNIT_CONFIG.SIZE_NORMAL.width;
+// const H = UNIT_CONFIG.SIZE_NORMAL.height;
 
 function UnitSprite({ id }: { id: string }) {
   const containerRef    = useRef<PIXI.Container>(null);
@@ -26,8 +27,13 @@ function UnitSprite({ id }: { id: string }) {
 
   const unit           = useGameStore(s => s.units[id]);
   const selectedUnitId  = useGameStore(s => s.selectedUnitId);
+  const confirmedDest   = useGameStore(s => s.confirmedDestination);
   const selectUnit      = useGameStore(s => s.selectUnit);
   const setHoveredUnit  = useGameStore(s => s.setHoveredUnitId);
+
+  const isConfirmedTarget = selectedUnitId === id && confirmedDest !== null;
+  const visualX = isConfirmedTarget && confirmedDest ? tileToPixel(confirmedDest.lx) : (unit?.x ?? 0);
+  const visualY = isConfirmedTarget && confirmedDest ? tileToPixel(confirmedDest.ly) : (unit?.y ?? 0);
 
   useTick((delta) => {
     const ct = containerRef.current;
@@ -35,7 +41,18 @@ function UnitSprite({ id }: { id: string }) {
 
     const u = useGameStore.getState().units[id];
     if (!u || u.state === 'IDLE' || u.state === 'DEAD') {
-      if (u) { ct.x = u.x; ct.y = u.y; }
+      if (u) {
+        // 확정된 이동 타겟이 있다면 (아직 state는 IDLE이어도) 시각적으로만 옮겨둠
+        const isTarget = useGameStore.getState().selectedUnitId === id;
+        const dest = useGameStore.getState().confirmedDestination;
+        if (isTarget && dest) {
+          ct.x = tileToPixel(dest.lx);
+          ct.y = tileToPixel(dest.ly);
+        } else {
+          ct.x = u.x;
+          ct.y = u.y;
+        }
+      }
       waypointIndexRef.current = 0;
       return;
     }
@@ -81,10 +98,12 @@ function UnitSprite({ id }: { id: string }) {
     if (dist <= MOVE_SPEED * delta) {
       ct.x = targetX;
       ct.y = targetY;
+      ct.zIndex = targetY;
       waypointIndexRef.current = wpIdx + 1;
     } else {
       ct.x += dx * (MOVE_SPEED * delta) / dist;
       ct.y += dy * (MOVE_SPEED * delta) / dist;
+      ct.zIndex = ct.y;
     }
   });
 
@@ -104,10 +123,11 @@ function UnitSprite({ id }: { id: string }) {
   return (
     <Container
       ref={containerRef}
-      x={unit.x}
-      y={unit.y}
+      key={id}
+      x={visualX}
+      y={visualY}
       alpha={alpha}
-      zIndex={unit.y}
+      zIndex={visualY}
       eventMode="static"
       cursor={isActive ? 'pointer' : 'default'}
       onpointerenter={() => setHoveredUnit(id)}
@@ -140,34 +160,63 @@ function UnitSprite({ id }: { id: string }) {
         selectUnit(id);
       }}
     >
-      {/* 배경 사각형 (세력 색상) */}
-      <Sprite
-        texture={PIXI.Texture.WHITE}
-        tint={bgColor}
-        width={W}
-        height={H}
-        anchor={0.5}
-      />
-
-      {/* 선택 시 내부 색 표시 (흰 배경에 세력색 작은 사각형) */}
-      {isSelected && (
+      {/* 쿼터뷰에서 유닛 스프라이트가 기울어지거나 납작해지지 않도록, 카메라를 똑바로 보도록 역(Inverse) 변환 */}
+      {/* 부모가 S(1, 0.5) * R(45) 이므로 원래 역변환은 R(-45) * S(1, 2) 지만, 유닛을 50% 축소하기 위해 S(0.5, 1) 적용 */}
+      <Container rotation={-Math.PI / 4} scale={{ x: 0.5, y: 1.0 }}>
+        
+        {/* 배경 사각형 (세력 색상) -> 쿼터뷰 역변환 상태이므로 정사각형으로 반듯하게 섭니다 */}
         <Sprite
           texture={PIXI.Texture.WHITE}
-          tint={color}
-          width={W - 4}
-          height={H - 4}
-          anchor={0.5}
+          tint={bgColor}
+          width={MAP_CONFIG.TILE_SIZE * 0.8}
+          height={MAP_CONFIG.TILE_SIZE * 0.8}
+          anchor={{ x: 0.5, y: 1.0 }} // 하단 중앙을 기준점으로 (타일 딛고 서 있도록 설정)
         />
-      )}
+        
+        {/* 병종 아이콘 */}
+        {iconTexture && (
+          <Sprite
+            texture={iconTexture}
+            width={MAP_CONFIG.TILE_SIZE * 0.6}
+            height={MAP_CONFIG.TILE_SIZE * 0.6}
+            anchor={0.5}
+            y={-12} // 배경 중앙보다 살짝 위로
+            alpha={0.9}
+          />
+        )}
+        
+        {/* 장수(GENERAL)일 경우 왕관 표시 추가 등 */}
+        {unit.unitType === 'GENERAL' && (
+          <Text
+            text="👑"
+            style={new PIXI.TextStyle({ fontSize: 14 })}
+            anchor={0.5}
+            y={-24} // 아이콘 위쪽에 배치
+          />
+        )}
 
-      {/* 병종 아이콘 (이모지) */}
-      <Sprite
-        texture={iconTexture}
-        width={W * 0.75}
-        height={H * 0.75}
-        anchor={0.5}
-        y={-2}
-      />
+        <Text
+          text={unit.id.substring(0, 4)}
+          style={
+            new PIXI.TextStyle({
+              fontSize: 10,
+              fill: isSelected ? 0x000000 : 0xffffff,
+              fontWeight: 'bold',
+            })
+          }
+          anchor={0.5}
+          y={2}
+        />
+
+        {isActive && (
+          <Text
+            text="▼"
+            style={new PIXI.TextStyle({ fontSize: 16, fill: 0xffff00, fontWeight: 'bold' })}
+            anchor={0.5}
+            y={-34}
+          />
+        )}
+      </Container>
     </Container>
   );
 }
@@ -178,10 +227,10 @@ export default function UnitsLayer() {
   ));
 
   return (
-    <Container sortableChildren={true}>
+    <>
       {unitIds.map(id => (
         <UnitSprite key={id} id={id} />
       ))}
-    </Container>
+    </>
   );
 }

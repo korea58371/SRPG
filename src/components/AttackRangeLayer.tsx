@@ -74,8 +74,9 @@ export default function AttackRangeLayer() {
     const attacker = useGameStore.getState().units[selectedUnitId];
     if (!attacker) return;
 
-    const lx = Math.floor(e.global.x / TILE);
-    const ly = Math.floor(e.global.y / TILE);
+    const pos = e.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
+    const lx = Math.floor(pos.x / TILE);
+    const ly = Math.floor(pos.y / TILE);
 
     // 맨해튼 거리 내 + 적군 있는 타일인지 확인
     const dist = Math.abs(lx - confirmedDest.lx) + Math.abs(ly - confirmedDest.ly);

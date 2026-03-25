@@ -99,8 +99,9 @@ export default function MoveRangeLayer() {
 
   // 이벤트 좌표 → 타일 좌표 변환
   const getTileFromEvent = useCallback((e: PIXI.FederatedPointerEvent) => {
-    const lx = Math.floor(e.global.x / TILE);
-    const ly = Math.floor(e.global.y / TILE);
+    const pos = e.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
+    const lx = Math.floor(pos.x / TILE);
+    const ly = Math.floor(pos.y / TILE);
     const key = `${lx},${ly}`;
     const tiles = useGameStore.getState().moveRangeTiles;
     return tiles.has(key) ? { lx, ly } : null;

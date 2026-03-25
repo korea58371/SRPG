@@ -2,15 +2,17 @@
 // 최상위 라우터 — AppScreen enum에 따라 화면 전환
 // 전투 결과 감지 + 모바일 뒤로가기 인터셉트 포함
 
-import { Stage }        from '@pixi/react';
-import { useEffect, useCallback } from 'react';
+import { Stage, Container }        from '@pixi/react';
+import * as PIXI from 'pixi.js';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import TerrainMap       from './components/TerrainMap';
 import UnitsLayer       from './components/UnitsLayer';
 import MoveRangeLayer   from './components/MoveRangeLayer';
 import PathLayer        from './components/PathLayer';
 import AttackRangeLayer from './components/AttackRangeLayer';
-import CitiesLayer      from './components/CitiesLayer';
+import MapObjectsLayer  from './components/MapObjectsLayer';
 import CloudShadow      from './components/CloudShadow';
+import FogLayer         from './components/FogLayer';
 import ActionMenu       from './components/ActionMenu';
 import FloatingDamageLayer from './components/FloatingDamageLayer';
 import UnitInfoPanel    from './components/UnitInfoPanel';
@@ -136,6 +138,7 @@ function BattleScreen() {
   const initUnits           = useGameStore(s => s.initUnits);
   const mapData             = useGameStore(s => s.mapData);
   const units               = useGameStore(s => s.units);
+  const activeUnitId        = useGameStore(s => s.activeUnitId);
   const selectUnit          = useGameStore(s => s.selectUnit);
   const selectedUnitId      = useGameStore(s => s.selectedUnitId);
   const cancelConfirmedMove = useGameStore(s => s.cancelConfirmedMove);
@@ -151,8 +154,8 @@ function BattleScreen() {
 
   // 맵 초기화 (전투 진입 시마다)
   useEffect(() => {
-    const { map, cities, mapInfo } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
-    setMapData(map);
+    const { map, elevMap, cities, mapInfo, mapObjects } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+    setMapData(map, elevMap, mapObjects);
     setCities(cities);
     setBiome(mapInfo);
   }, [setMapData, setCities, setBiome]);
@@ -174,6 +177,131 @@ function BattleScreen() {
     initUnits(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, attackerId, defenderId);
   }, [setBattleType, initUnits, pendingBattle, provinces]);
 
+  // ─── 카메라 팬 & 줌 로직 ───
+  const [camera, setCamera] = useState({ x: window.innerWidth / 2, y: 100, scale: 1 });
+  const isDragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  // 안전 범위(Black Screen Void 방지용)
+  const clampCamera = (cam: { x: number; y: number; scale: number }) => ({
+    x: Math.max(-4000, Math.min(4000, cam.x)),
+    y: Math.max(-4000, Math.min(4000, cam.y)),
+    scale: cam.scale,
+  });
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    const ZOOM_SPEED = 0.1;
+    setCamera(prev => {
+      let newScale = prev.scale - Math.sign(e.deltaY) * ZOOM_SPEED;
+      newScale = Math.max(0.3, Math.min(newScale, 4.5));
+      if (newScale === prev.scale) return prev;
+
+      const mouseX = e.clientX;
+      const mouseY = e.clientY;
+      const mouseWorldX = (mouseX - prev.x) / prev.scale;
+      const mouseWorldY = (mouseY - prev.y) / prev.scale;
+      
+      const newX = mouseX - mouseWorldX * newScale;
+      const newY = mouseY - mouseWorldY * newScale;
+
+      return clampCamera({ x: newX, y: newY, scale: newScale });
+    });
+  }, []);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    isDragging.current = true;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isDragging.current) return;
+    const dx = e.clientX - lastPos.current.x;
+    const dy = e.clientY - lastPos.current.y;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    setCamera(prev => clampCamera({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+  }, []);
+
+  const handlePointerUp = useCallback(() => {
+    isDragging.current = false;
+  }, []);
+
+  // ─── 키보드 WASD 카메라 패닝 로직 ───
+  const keys = useRef<{ [key: string]: boolean }>({});
+  const rafRef = useRef<number>(0);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = true; };
+    const handleKeyUp   = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = false; };
+    const handleBlur    = () => {
+      keys.current = {};
+      isDragging.current = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+
+    let lastTime = performance.now();
+    const updateCamera = (time: number) => {
+      rafRef.current = requestAnimationFrame(updateCamera);
+      const dt = time - lastTime;
+      lastTime = time;
+
+      // dt가 비정상적으로 크면 무시 (탭 전환 등)
+      if (dt > 100) return;
+
+      const speed = 0.8 * dt; // 이동 속도 조정
+      let dx = 0; let dy = 0;
+
+      // W: 카메라 위로 이동 (화면의 월드는 아래로 내려가야 함 -> y 증가)
+      if (keys.current['w'] || keys.current['arrowup'])    dy += speed;
+      if (keys.current['s'] || keys.current['arrowdown'])  dy -= speed;
+      if (keys.current['a'] || keys.current['arrowleft'])  dx += speed;
+      if (keys.current['d'] || keys.current['arrowright']) dx -= speed;
+
+      if (dx !== 0 || dy !== 0) {
+        setCamera(prev => clampCamera({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+      }
+    };
+    rafRef.current = requestAnimationFrame(updateCamera);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // ─── 턴 시작 시 활성 유닛으로 자동 카메라 포커스 ───
+  useEffect(() => {
+    if (!activeUnitId) return;
+    const unit = useGameStore.getState().units[activeUnitId];
+    if (!unit) return;
+
+    // 1. 유닛의 로지컬 픽셀 공간 좌표
+    const worldX = unit.logicalX * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+    const worldY = unit.logicalY * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+
+    // 2. 쿼터뷰(Isometric) 렌더링 파이프라인 수동 시뮬레이션
+    //  a. 회전 (Math.PI / 4)
+    const angle = Math.PI / 4;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const rx = worldX * cosA - worldY * sinA;
+    const ry = worldX * sinA + worldY * cosA;
+    //  b. 스케일 압축 (1, 0.5)
+    const ix = rx * 1;
+    const iy = ry * 0.5;
+
+    // 3. 현재 스케일을 기준으로 화면 정중앙에 위치하도록 Camera 포지션 세팅
+    setCamera(prev => clampCamera({
+      ...prev,
+      x: window.innerWidth / 2 - ix * prev.scale,
+      y: window.innerHeight / 2 - iy * prev.scale,
+    }));
+  }, [activeUnitId]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     if (confirmedDest) cancelConfirmedMove();
@@ -181,19 +309,59 @@ function BattleScreen() {
   }, [confirmedDest, cancelConfirmedMove, selectedUnitId, selectUnit]);
 
   return (
-    <div className="w-full h-screen bg-black overflow-hidden relative font-sans" onContextMenu={handleContextMenu}>
+    <div 
+      className="w-full h-screen bg-[#70714e] overflow-hidden relative font-sans" 
+      onContextMenu={handleContextMenu}
+      onWheel={handleWheel}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerUp}
+    >
       <Stage
         width={window.innerWidth}
         height={window.innerHeight}
-        options={{ autoDensity: true, resolution: window.devicePixelRatio, backgroundColor: 0x111111 }}
+        options={{ autoDensity: true, resolution: window.devicePixelRatio, backgroundColor: 0x70714e }}
+        style={{ touchAction: 'none' }} // 드래그 시 브라우저 스크롤 방지
       >
-        <TerrainMap />
-        <CitiesLayer />
-        <MoveRangeLayer />
-        <AttackRangeLayer />
-        <PathLayer />
-        <UnitsLayer />
-        <CloudShadow />
+        <Container 
+          x={camera.x} 
+          y={camera.y}
+          scale={camera.scale}
+        >
+          {/* Isometric Transform & 전역 Depth 정렬 */}
+          <Container scale={{ x: 1, y: 0.5 }}>
+            <Container 
+              rotation={Math.PI / 4} 
+              sortableChildren={true}
+              eventMode="static"
+              onpointermove={(e) => {
+                // 상단 레이어들의 간섭을 피해 가장 넓은 컨테이너에서 마우스 위치를 감지합니다.
+                const pos = e.data.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
+                const lx = Math.floor(pos.x / MAP_CONFIG.TILE_SIZE);
+                const ly = Math.floor(pos.y / MAP_CONFIG.TILE_SIZE);
+                useGameStore.getState().setHoveredMapTile({ lx, ly });
+                useGameStore.getState().setHoveredMapPixel({ x: pos.x, y: pos.y });
+              }}
+              onpointerout={() => {
+                useGameStore.getState().setHoveredMapTile(null);
+                useGameStore.getState().setHoveredMapPixel(null);
+              }}
+            >
+              <TerrainMap />
+              <MoveRangeLayer />
+              <AttackRangeLayer />
+              <PathLayer />
+              
+              {/* Entity Layout Nodes (Z-Index 기반 혼합 정렬됨) */}
+              <MapObjectsLayer />
+              <UnitsLayer />
+              
+              <FogLayer />
+              {/* <CloudShadow /> */}
+            </Container>
+          </Container>
+        </Container>
       </Stage>
 
       {/* 전장 타입 선택 오버레이 */}
@@ -225,7 +393,7 @@ function BattleScreen() {
       )}
 
       <TurnHUD />
-      <ActionMenu />
+      <ActionMenu camera={camera} />
       <TurnEndPrompt />
       <UnitInfoPanel />
       <FloatingDamageLayer />

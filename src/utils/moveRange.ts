@@ -7,7 +7,7 @@
 // 3. ZoC: 적군 인접 타일 도달 시 이동 정지 (해당 타일은 목적지 가능)
 
 import type { TerrainType, TilePos } from '../types/gameTypes';
-import { TERRAIN_BONUS } from '../constants/gameConfig';
+import { TERRAIN_BONUS, isPlayableTile } from '../constants/gameConfig';
 
 const DIRS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -50,6 +50,7 @@ export function calcMoveRange(
       const nx = cx + dx;
       const ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= mapW || ny >= mapH) continue;
+      if (!isPlayableTile(nx, ny, mapW, mapH)) continue; // 추가: 안개가 짙은 구역 접근 불가
       const nKey = `${nx},${ny}`;
       if (enemyTiles.has(nKey)) continue;
       const terrain = mapData[ny]?.[nx];
@@ -110,6 +111,7 @@ export function findMovePath(
       const nx = cx + dx;
       const ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= mapW || ny >= mapH) continue;
+      if (!isPlayableTile(nx, ny, mapW, mapH)) continue; // 제한구역 접근 금지
       const nKey = `${nx},${ny}`;
       if (enemyTiles.has(nKey)) continue;
       const terrain = mapData[ny]?.[nx];

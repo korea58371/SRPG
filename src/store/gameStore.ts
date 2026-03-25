@@ -12,9 +12,9 @@
 // ───────────────────────────────────────────────────────────────
 
 import { create } from 'zustand';
-import type { Unit, FactionId, UnitType, TilePos, BattleType } from '../types/gameTypes';
+import type { Unit, FactionId, UnitType, TilePos, BattleType, MapObjectData } from '../types/gameTypes';
 import { TerrainType } from '../types/gameTypes';
-import { MAP_CONFIG, UNIT_CONFIG, BASE_STATS, UNIT_MATCHUPS, CT_THRESHOLD, GENERAL_INITIAL_STATS } from '../constants/gameConfig';
+import { MAP_CONFIG, UNIT_CONFIG, BASE_STATS, UNIT_MATCHUPS, CT_THRESHOLD, GENERAL_INITIAL_STATS, PLAYER_FACTION, isPlayableTile } from '../constants/gameConfig';
 import { calcMoveRange, findMovePath } from '../utils/moveRange';
 import type { MapInfo } from '../utils/mapGenerator';
 import type { BattleOutcome } from '../types/appTypes';
@@ -166,6 +166,8 @@ function _calcNextActive(
 interface GameState {
   units: Record<string, Unit>;
   mapData: TerrainType[][] | null;
+  elevMap: number[][] | null; // 새로 추가된 고도맵
+  mapObjects: MapObjectData[]; // 타일 위에 서 있는 프롭(나무, 집 등) 리스트
   cities: { x: number; y: number }[];
   battleType: BattleType;
   biome: MapInfo | null;
@@ -178,6 +180,8 @@ interface GameState {
   selectedUnitId: string | null;
   moveRangeTiles: Set<string>;
   hoveredMoveTile: TilePos | null;
+  hoveredMapTile: TilePos | null;
+  hoveredMapPixel: { x: number; y: number } | null;
   previewPath: TilePos[];
   confirmedDestination: TilePos | null;
   confirmedPath: TilePos[];
@@ -198,13 +202,15 @@ interface GameState {
   enterAttackTargetMode: () => void;
   executeAttackOnTarget: (targetId: string) => void;
 
-  setMapData: (data: TerrainType[][]) => void;
+  setMapData: (mapData: TerrainType[][], elevMap: number[][], mapObjects: MapObjectData[]) => void;
   setCities: (cities: { x: number; y: number }[]) => void;
   setBattleType: (type: BattleType) => void;
   setBiome: (biome: MapInfo) => void;
   initUnits: (mapWidth: number, mapHeight: number, attackerFactionId: FactionId, defenderFactionId: FactionId) => void;
   selectUnit: (id: string | null) => void;
   setHoveredMoveTile: (tile: TilePos | null) => void;
+  setHoveredMapTile: (tile: TilePos | null) => void;
+  setHoveredMapPixel: (pixel: { x: number; y: number } | null) => void;
   confirmMove: (lx: number, ly: number) => void;
   cancelConfirmedMove: () => void;
   executeAction: (action: ActionMenuType) => void;
@@ -215,6 +221,8 @@ interface GameState {
 export const useGameStore = create<GameState>((set, get) => ({
   units: {},
   mapData: null,
+  elevMap: null,
+  mapObjects: [],
   cities: [],
   battleType: 'defensive',
   biome: null,
@@ -223,6 +231,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   selectedUnitId: null,
   moveRangeTiles: new Set<string>(),
   hoveredMoveTile: null,
+  hoveredMapTile: null,
+  hoveredMapPixel: null,
   previewPath: [],
   confirmedDestination: null,
   confirmedPath: [],
@@ -232,6 +242,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   hoveredUnitId: null,
   battleResult: null,
 
+  setHoveredMapTile: (pos) => set({ hoveredMapTile: pos }),
+  setHoveredMapPixel: (pixel) => set({ hoveredMapPixel: pixel }),
   setHoveredUnitId: (id) => set({ hoveredUnitId: id }),
   clearBattleResult: () => set({ battleResult: null }),
   removeFloatingDamage: (id) => set(s => ({ floatingDamages: s.floatingDamages.filter(d => d.id !== id) })),
@@ -251,7 +263,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     _moveThenAct(set, s, selectedUnitId, unit, dest, px, py, waypoints, targetId);
   },
 
-  setMapData: (data) => set({ mapData: data }),
+  setMapData: (mapData, elevMap, mapObjects) => set({ mapData, elevMap, mapObjects }),
   setCities: (cities) => set({ cities }),
   setBattleType: (type) => set({ battleType: type }),
   setBiome: (biome) => set({ biome }),
@@ -264,6 +276,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const isValidSpawn = (lx: number, ly: number): boolean => {
       if (lx < 0 || lx >= mapWidth || ly < 0 || ly >= mapHeight) return false;
+      if (!isPlayableTile(lx, ly, mapWidth, mapHeight)) return false; // 안개 구역 접근 불가
       if (usedTiles.has(`${lx},${ly}`)) return false;
       if (!mapData) return true;
       return !isSpawnBlockedTile(mapData[ly]?.[lx]);
@@ -449,7 +462,13 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   // ─── 이동 취소 ──────────────────────────────────────────────────────────
-  cancelConfirmedMove: () => set({ confirmedDestination: null, confirmedPath: [], hoveredMoveTile: null, previewPath: [] }),
+  cancelConfirmedMove: () => set({
+    confirmedDestination: null,
+    confirmedPath: [],
+    hoveredMoveTile: null,
+    previewPath: [],
+    attackTargetMode: false,
+  }),
 
   // ─── 행동 실행 ──────────────────────────────────────────────────────────
   executeAction: (action) => {
@@ -508,7 +527,7 @@ function _advanceTurn(
   const activeUnit = updatedUnits[activeId];
   set({ units: updatedUnits, activeUnitId: activeId });
 
-  if (activeUnit.factionId === 'western_empire') {
+  if (activeUnit.factionId === PLAYER_FACTION) {
     // 플레이어 유닛: 자동 선택 + 이동 범위 표시
     if (!s.mapData) return;
     const { friendlyTiles, enemyTiles } = buildTileSets(updatedUnits, activeId);

@@ -879,10 +879,10 @@ export const StrategyMapScreen = () => {
                   alpha={lod1Alpha}
                   style={new PIXI.TextStyle({
                     fontFamily: 'NanumBarunGothic, sans-serif',
-                    fontSize: 48,
+                    fontSize: 24,
                     fontWeight: '900',
                     fill: 0xffffff,
-                    dropShadow: true, dropShadowColor: 0x000000, dropShadowDistance: 4, dropShadowBlur: 4, dropShadowAlpha: 1
+                    dropShadow: true, dropShadowColor: 0x000000, dropShadowDistance: 2, dropShadowAlpha: 1
                   })}
                 />
               ))}

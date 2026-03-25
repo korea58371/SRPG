@@ -5,10 +5,35 @@ import { TerrainType } from '../types/gameTypes';
 // 맵 및 타일 관련 설정
 export const MAP_CONFIG = {
   TILE_SIZE: 24,
-  WIDTH: 84,
-  HEIGHT: 50,
+  WIDTH: 60,
+  HEIGHT: 60,
   NOISE_SCALE: 15,
 };
+
+// 맵 외곽을 안개(어둠)로 덮기 위한 거리/위험도 계산
+export function getTileDarkness(x: number, y: number, w: number, h: number): number {
+  const cx = w / 2;
+  const cy = h / 2;
+  // 중앙으로부터의 정규화된 절대 거리 (0 ~ 1)
+  const nx = Math.abs(x - cx + 0.5) / cx;
+  const ny = Math.abs(y - cy + 0.5) / cy;
+  
+  // 쿼터뷰(Isometric) 적용 시, 로지컬 그리드의 정사각형 둘레(Math.max)가 화면상 완벽한 중앙 대칭 정 마름모로 나타납니다.
+  const dist = Math.max(nx, ny);
+  
+  // 거리가 0.6 이하인 중앙 뷰 영역은 이동 가능 구역(안개 0) - 가로/세로 기준 정확히 중심 60% 면적
+  if (dist <= 0.6) return 0;
+  
+  // 0.6 부터 1.0(가장자리)까지 부드러운 그라데이션 안개
+  // 단, 이동 한계 경계선을 확실히 인지할 수 있도록 0.6을 넘자마자 즉시 20%(0.2)의 불투명도를 부여합니다.
+  const factor = 0.2 + ((dist - 0.6) / 0.4) * 0.8;
+  return Math.min(1, factor);
+}
+
+// 안개가 시작되는 지점(darkness > 0)부터는 이동 불가 구역으로 취급
+export function isPlayableTile(x: number, y: number, w: number, h: number): boolean {
+  return getTileDarkness(x, y, w, h) === 0;
+}
 
 // 유닛 설정
 export const UNIT_CONFIG = {

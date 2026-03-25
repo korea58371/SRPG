@@ -7,7 +7,7 @@
 import { useGameStore, tileToPixel, getAttackableTargets } from '../store/gameStore';
 import type { ActionMenuType } from '../store/gameStore';
 
-export default function ActionMenu() {
+export default function ActionMenu({ camera }: { camera: { x: number; y: number; scale: number } }) {
   const confirmedDest       = useGameStore(s => s.confirmedDestination);
   const selectedUnitId      = useGameStore(s => s.selectedUnitId);
   const executeAction       = useGameStore(s => s.executeAction);
@@ -16,12 +16,17 @@ export default function ActionMenu() {
   const units               = useGameStore(s => s.units);
   const cancelConfirmed     = useGameStore(s => s.cancelConfirmedMove);
 
-  // 공격 타겟 선택 모드일 때는 안내 메시지만 표시
   if (attackTargetMode && confirmedDest) {
     const px = tileToPixel(confirmedDest.lx);
     const py = tileToPixel(confirmedDest.ly);
+    const angle = Math.PI / 4;
+    const rx = px * Math.cos(angle) - py * Math.sin(angle);
+    const ry = px * Math.sin(angle) + py * Math.cos(angle);
+    const screenX = camera.x + rx * 1 * camera.scale;
+    const screenY = camera.y + ry * 0.5 * camera.scale;
+
     return (
-      <div className="absolute z-50 pointer-events-auto" style={{ left: px + 24, top: py - 40 }}>
+      <div className="absolute z-50 pointer-events-auto" style={{ left: screenX + 24 * camera.scale, top: screenY - 50 }}>
         <div className="bg-red-900/90 border border-red-500 rounded-xl px-4 py-2 text-xs font-bold text-red-200 shadow-xl backdrop-blur-sm flex items-center gap-2">
           <span>⚔️</span>
           <span>공격할 적군을 클릭하세요</span>
@@ -44,12 +49,21 @@ export default function ActionMenu() {
 
   const px = tileToPixel(confirmedDest.lx);
   const py = tileToPixel(confirmedDest.ly);
+  const angle = Math.PI / 4;
+  const rx = px * Math.cos(angle) - py * Math.sin(angle);
+  const ry = px * Math.sin(angle) + py * Math.cos(angle);
+  const screenX = camera.x + rx * 1 * camera.scale;
+  const screenY = camera.y + ry * 0.5 * camera.scale;
+
   const menuW = 140;
   const menuH = 130;
   const MARGIN = 10;
-  let left = px + 24;
-  let top  = py - menuH / 2;
-  if (left + menuW > window.innerWidth - MARGIN) left = px - menuW - 24;
+  
+  // 유닛의 우측 상단 쯤에 표시
+  let left = screenX + 16 * camera.scale;
+  let top  = screenY - 16 * camera.scale - menuH / 2;
+  
+  if (left + menuW > window.innerWidth - MARGIN) left = screenX - menuW - 16 * camera.scale;
   if (top < MARGIN) top = MARGIN;
   if (top + menuH > window.innerHeight - MARGIN) top = window.innerHeight - menuH - MARGIN;
 

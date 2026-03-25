@@ -23,6 +23,15 @@ export interface TilePos {
   ly: number;
 }
 
+export interface MapObjectData {
+  id: string;
+  type: 'TREE' | 'MOUNTAIN' | 'HOUSE';
+  lx: number;
+  ly: number;
+  px: number; /* 내부 오프셋 적용된 픽셀 좌표 */
+  py: number;
+}
+
 // ─ 장수 내정 특성 (Passive Effects) ─────────────────────────
 export interface HeroPassiveEffect {
   recruitmentBonus: number;            // 모병량 보너스 (%)

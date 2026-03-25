@@ -1,44 +1,41 @@
 // J:/AI/Game/SRPG/src/components/TerrainMap.tsx
-// 지형 렌더링: App.tsx가 store에 주입한 단일 mapData를 구독하여 렌더링
-// generateMapData를 직접 호출하지 않음 → 유닛 배치 지형과 동일한 맵 보장
+// 지형 렌더링: 통짜 부드러운 텍스처(캔버스)를 생성하여 단일 Sprite로 렌더링
 
+import { useEffect, useState } from 'react';
 import { Container, Sprite } from '@pixi/react';
 import { useShallow } from 'zustand/react/shallow';
 import { useGameStore } from '../store/gameStore';
-import { TerrainType } from '../types/gameTypes';
 import { MAP_CONFIG } from '../constants/gameConfig';
 import * as PIXI from 'pixi.js';
-
-const COLORS: Record<number, number> = {
-  [TerrainType.SEA]:    0x1c4587, // 짙은 파란색
-  [TerrainType.BEACH]:  0xe6b8af, // 연살색 모래
-  [TerrainType.GRASS]:  0x8BAA68, // 올리브 세이지 초원
-  [TerrainType.CLIFF]:  0x4a3623, // 짙은 갈색 절벽
-  [TerrainType.PATH]:   0xEDE8D0, // 밝은 아이보리 길
-  [TerrainType.FOREST]: 0x263A18, // 짙은 암녹색 숲
-};
+import { generateMapTexture } from '../utils/mapGenerator';
 
 export default function TerrainMap() {
-  // store의 단일 맵 데이터를 구독 (useShallow로 불필요한 리렌더 방지)
   const mapData = useGameStore(useShallow(s => s.mapData));
+  const [texture, setTexture] = useState<PIXI.Texture | null>(null);
 
-  if (!mapData) return null;
+  useEffect(() => {
+    if (!mapData) return;
+    
+    // mapData를 이용해 단색 기반 캔버스 텍스처를 구워냄
+    const canvas = generateMapTexture(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, MAP_CONFIG.TILE_SIZE, mapData);
+    const newTex = PIXI.Texture.from(canvas);
+    setTexture(newTex);
+    
+    return () => {
+      newTex.destroy(true);
+    };
+  }, [mapData]);
+
+  if (!texture) return null;
 
   return (
     <Container>
-      {mapData.map((row, y) =>
-        row.map((type, x) => (
-          <Sprite
-            key={`${x}-${y}`}
-            texture={PIXI.Texture.WHITE}
-            tint={COLORS[type] ?? 0x000000}
-            width={MAP_CONFIG.TILE_SIZE}
-            height={MAP_CONFIG.TILE_SIZE}
-            x={x * MAP_CONFIG.TILE_SIZE}
-            y={y * MAP_CONFIG.TILE_SIZE}
-          />
-        ))
-      )}
+      {/* 1500개의 타일 대신, 단 1개의 거대한 통짜 스프라이트 렌더링 (퍼포먼스 극비 확보 + 시각적 부드러움) */}
+      <Sprite 
+        texture={texture} 
+        x={0} 
+        y={0} 
+      />
     </Container>
   );
 }
