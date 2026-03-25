@@ -39,6 +39,8 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   lastBattleOutcome: null,
   endingType: null,
   worldSeed: 0,
+  coastlineEdges: null,
+  coastlinePolygons: null,
 
   // ─── 화면 이동 ──────────────────────────────────────────────────────────
   goTo: (screen: AppScreen) => set({ screen }),
@@ -46,7 +48,7 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   // ─── 게임 시작 ──────────────────────────────────────────────────────────
   startGame: () => {
     const seed = Date.now();
-    const { provinces } = generateProvinces(900, 560, seed);
+    const { provinces } = generateProvinces(1440, 820, seed);
     const diplomacyRelations: Record<string, DiplomacyRel> = {};
     const factionResources: Record<FactionId, FactionResource> = {};
     

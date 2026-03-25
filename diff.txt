@@ -1,0 +1,46 @@
+diff --git a/src/screens/StrategyMapScreen.tsx b/src/screens/StrategyMapScreen.tsx
+index c529636..1ef1a64 100644
+--- a/src/screens/StrategyMapScreen.tsx
++++ b/src/screens/StrategyMapScreen.tsx
+@@ -633,9 +633,18 @@ export const StrategyMapScreen = () => {
+               <PixiGraphics draw={drawCombinedBorders} />
+             </Container>
+ 
+-            {/* 6. Terrain Sprites */}
+-            <Container name="L5-Terrain" zIndex={60}>
+-              {terrainIcons.map((ti, idx) => {
++            {/* 6. Terrain Sprites (Y-Sorting 기반 오버레이. 전체 덩어리로서 Multiply 블렌딩) */}
++            <Container 
++              name="L5-Terrain" 
++              zIndex={60} 
++              filters={useMemo(() => {
++                const f = new PIXI.filters.AlphaFilter(1.0);
++                f.blendMode = PIXI.BLEND_MODES.MULTIPLY;
++                f.padding = 64; // 혹시 모를 외곽 짤림 방지
++                return [f];
++              }, [])}
++            >
++              {[...terrainIcons].sort((a, b) => a.y - b.y).map((ti, idx) => {
+                 const variants: string[] | undefined =
+                   ti.type === 'peak'     ? TERRAIN_MANIFEST.mountain_rugged :
+                   ti.type === 'mountain' ? TERRAIN_MANIFEST.mountain_normal  :
+@@ -652,8 +661,8 @@ export const StrategyMapScreen = () => {
+                 if (screenX < -displaySize || screenX > dimensions.w + displaySize) return null;
+                 if (screenY < -displaySize || screenY > dimensions.h + displaySize) return null;
+ 
+-                // Container.scale을 역보정하여 화면 크기를 고정
+-                const spriteScale = (displaySize / 64) / scale;
++                // 텍스트와 달리 맵 줌인/아웃 시 지형 오브젝트는 맵과 함께 크기가 변하도록 역보정 제거
++                const spriteScale = displaySize / 64;
+                 return (
+                   <Sprite
+                     key={`ti-${idx}`}
+@@ -662,7 +671,7 @@ export const StrategyMapScreen = () => {
+                     y={ti.y}
+                     anchor={0.5}
+                     scale={spriteScale}
+-                    blendMode={PIXI.BLEND_MODES.MULTIPLY}
++                    // 개별 요소의 blendMode는 기본(NORMAL)을 유지하여 자신의 하얀 속살로 뒤쪽 요소의 선을 가리게 만듦.
+                   />
+                 );
+               })}

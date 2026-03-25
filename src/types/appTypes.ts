@@ -76,6 +76,8 @@ export interface StrategyState {
     attackerProvinceId: string;
     defenderProvinceId: string;
   } | null;
+  coastlineEdges: { pts: number[], innerPts?: number[] }[] | null;
+  coastlinePolygons: number[][] | null;
   diplomacyRelations: Record<string, DiplomacyRel>;
   lastBattleOutcome: BattleOutcome | null;
   endingType: EndingType | null;

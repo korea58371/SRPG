@@ -143,7 +143,64 @@ function dot(ax: number, ay: number, bx: number, by: number) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 1. 지각판 시뮬레이션
+// 1. 지형 왜곡 함수 (Fractal Edge)
+// ──────────────────────────────────────────────────────────────────────────────
+function fractalizeEdge(
+  x1: number, y1: number,
+  x2: number, y2: number,
+  noiseFunc: (x: number, y: number) => number,
+  magnitude: number = 2.5
+): number[] {
+  // 항상 동일한 중간점을 얻기 위해 시작/끝점의 순서를 일관되게 고정 (해시 대신 좌표 비교)
+  const isReversed = x1 > x2 || (x1 === x2 && y1 > y2);
+  const px1 = isReversed ? x2 : x1;
+  const py1 = isReversed ? y2 : y1;
+  const px2 = isReversed ? x1 : x2;
+  const py2 = isReversed ? y1 : y2;
+
+  const dx = px2 - px1;
+  const dy = py2 - py1;
+  const length = Math.sqrt(dx * dx + dy * dy);
+
+  // 무조건 3개 이상의 세그먼트로 분할하여 짧은 엣지에서도 왜곡이 발생하도록 함 (1.5픽셀 단위)
+  const segments = Math.max(3, Math.floor(length / 1.5));
+  const pts: number[] = [px1, py1];
+
+  if (segments > 1) {
+    const nx = -dy / length;
+    const ny = dx / length;
+
+    for (let i = 1; i < segments; i++) {
+      const t = i / segments;
+      let ix = px1 + dx * t;
+      let iy = py1 + dy * t;
+
+      // 주파수를 높여 더 자글자글한 자연스러운 굴곡 형성
+      const nv = fbm(noiseFunc, ix * 0.25, iy * 0.25, 3);
+      
+      const taper = Math.sin(t * Math.PI);
+      
+      ix += nx * nv * magnitude * taper;
+      iy += ny * nv * magnitude * taper;
+
+      pts.push(ix, iy);
+    }
+  }
+  pts.push(px2, py2);
+
+  // 원래 방향으로 다시 뒤집어서 반환
+  if (isReversed) {
+    const rev: number[] = [];
+    for (let i = pts.length - 2; i >= 0; i -= 2) {
+      rev.push(pts[i], pts[i + 1]);
+    }
+    return rev;
+  }
+  return pts;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2. 지각판 시뮬레이션
 // ──────────────────────────────────────────────────────────────────────────────
 interface Plate {
   cx: number; cy: number; // 중심 (0~1 정규화)
@@ -313,8 +370,7 @@ export interface MicroCell {
 }
 
 export interface BoundaryEdge {
-  x1: number; y1: number;
-  x2: number; y2: number;
+  pts: number[];
   isFactionBoundary: boolean;
   provIdA: string | null;
   provIdB: string | null;
@@ -332,6 +388,7 @@ export interface RiverSegment {
   x1: number; y1: number;
   x2: number; y2: number;
   flux: number; // 강폭 결정을 위한 수량
+  pts: number[]; // 유기적 렌더링을 위한 곡선 폴리라인
 }
 
 export interface ProvinceWithCells {
@@ -341,7 +398,8 @@ export interface ProvinceWithCells {
   oceanDepth:    number[];
   terrainIcons:  TerrainIcon[];
   rivers: RiverSegment[];    // 맵 전역에 흐르는 강 줄기들
-  coastlineEdges: { x1: number; y1: number; x2: number; y2: number }[];
+  coastlineEdges: { pts: number[] }[];
+  coastlinePolygons: number[][];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -696,8 +754,12 @@ export function generateProvinces(
   for (let i = 0; i < MICRO_CELLS; i++) {
     const cell = voronoi.cellPolygon(i);
     vCellPolygons.push(cell);
-    if (!cell) continue;
+    if (!cell || cell.length < 3) continue;
+
+    // SVG path 문자열로 변환 (기존의 직선 다각형 유지)
+    // 배경 채색은 PIXI.js 삼각화(earcut) 오류를 방지하기 위해 단순한 다각형으로 칠하고, 그 위의 윤곽선들만 프랙탈로 덧입힙니다.
     const path = 'M' + cell.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join('L') + 'Z';
+
     const si   = microToProv[i];
     const pid  = si !== null ? provinceIds[si] : null;
     allCells.push({
@@ -714,15 +776,22 @@ export function generateProvinces(
 
   // ── 12. Province 경계 및 해안선 엣지 계산 ─────────────────────────────
   const boundaryEdges: BoundaryEdge[] = [];
-  const coastlineEdges: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  const coastlineEdges: { pts: number[] }[] = [];
   const cc = voronoi.circumcenters;
+
+  // 방향성 해안선 엣지. 육지를 항상 진행 방향의 왼쪽에 위치시키기 위함.
+  interface DirectedEdge {
+    t1: number;
+    t2: number;
+    pts: number[];
+  }
+  const directedCoastEdges: DirectedEdge[] = [];
 
   for (let e = 0; e < halfedges.length; e++) {
     const opp = halfedges[e];
     if (opp === -1 || opp < e) continue;
     const cellA = triangles[e], cellB = triangles[opp];
     
-    // 육지/바다 경계 (해안선) 판별
     const landA = isLand[cellA];
     const landB = isLand[cellB];
     const t1 = Math.floor(e / 3), t2 = Math.floor(opp / 3);
@@ -730,22 +799,94 @@ export function generateProvinces(
     
     if (landA !== landB) {
       if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
-        coastlineEdges.push({ x1, y1, x2, y2 });
+        const edgePts = fractalizeEdge(x1, y1, x2, y2, heightNoise, 2.0);
+        coastlineEdges.push({ pts: edgePts }); // 기존 렌더링 호환성 유지용 (잉크선)
+
+        // 법선을 구해서 육지가 무조건 왼쪽에 오도록(반시계) 선분의 방향(start->end)을 강제합니다.
+        let finalPts = edgePts;
+        let finalT1 = t1;
+        let finalT2 = t2;
+        
+        let dx = x2 - x1, dy = y2 - y1;
+        let nx = -dy, ny = dx; // 진행 방향의 '왼쪽' 직교 벡터
+        const landIdx = landA ? cellA : cellB;
+        let cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+        let vx = microPts[landIdx][0] - cx, vy = microPts[landIdx][1] - cy;
+        
+        // 내적(Dot Product)이 음수이면 육지가 오른쪽에 있으므로 선분을 뒤집습니다.
+        if (nx * vx + ny * vy < 0) {
+          finalPts = [];
+          for (let i = edgePts.length - 2; i >= 0; i -= 2) {
+            finalPts.push(edgePts[i], edgePts[i+1]);
+          }
+          finalT1 = t2;
+          finalT2 = t1;
+        }
+        
+        directedCoastEdges.push({ t1: finalT1, t2: finalT2, pts: finalPts });
       }
     }
 
     const provA = microToProv[cellA], provB = microToProv[cellB];
     if (provA === provB) continue;
     if (provA === null && provB === null) continue;
-    if (provA === null || provB === null) continue; // 해안선은 위에서 따로 처리함
+    if (provA === null || provB === null) continue; 
     if (isNaN(x1)||isNaN(y1)||isNaN(x2)||isNaN(y2)) continue;
     const fA = seeds[provA].faction, fB = seeds[provB].faction;
+    
+    const edgePts = fractalizeEdge(x1, y1, x2, y2, heightNoise, 3.5);
     boundaryEdges.push({
-      x1, y1, x2, y2,
+      pts: edgePts,
       isFactionBoundary: fA !== fB,
       provIdA: provinceIds[provA],
       provIdB: provinceIds[provB],
     });
+  }
+
+  // 12-b. 해안선 파편들을 연속된 폴리곤(대륙 외곽선)으로 병합
+  const coastlinePolygons: number[][] = [];
+  const nextEdgeMap = new Map<number, DirectedEdge>();
+  const inDegree = new Map<number, number>();
+  
+  for (const de of directedCoastEdges) {
+    nextEdgeMap.set(de.t1, de);
+    inDegree.set(de.t2, (inDegree.get(de.t2) || 0) + 1);
+  }
+
+  const visited = new Set<DirectedEdge>();
+
+  // 1. 단절된 경로(맵 테두리에서 시작되는 대륙) 처리
+  for (const de of directedCoastEdges) {
+    if (visited.has(de)) continue;
+    if (!inDegree.has(de.t1)) {
+      const poly: number[] = [];
+      let current: DirectedEdge | undefined = de;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        if (poly.length === 0) poly.push(...current.pts);
+        else {
+          for (let i = 2; i < current.pts.length; i++) poly.push(current.pts[i]);
+        }
+        current = nextEdgeMap.get(current.t2);
+      }
+      coastlinePolygons.push(poly);
+    }
+  }
+
+  // 2. 완전히 닫힌 루프(섬, 단일 대륙 등) 처리
+  for (const de of directedCoastEdges) {
+    if (visited.has(de)) continue;
+    const poly: number[] = [];
+    let current: DirectedEdge | undefined = de;
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      if (poly.length === 0) poly.push(...current.pts);
+      else {
+        for (let i = 2; i < current.pts.length; i++) poly.push(current.pts[i]);
+      }
+      current = nextEdgeMap.get(current.t2);
+    }
+    coastlinePolygons.push(poly);
   }
 
   // ── 13. 바다 깊이 BFS (해안 거리 1~4단계) ──────────────────────────────
@@ -851,18 +992,24 @@ export function generateProvinces(
   }
 
   // 일정 수량 이상 모이면 강(River) 세그먼트로 등록
-  const RIVER_THRESHOLD = 30; // 30셀 면적어치 이상의 비가 모여야 강 취급
+  const RIVER_THRESHOLD = 10; // 낮을수록 상류 구간도 포함됨 (너무 높으면 하류/해안만 보임)
   const rivers: RiverSegment[] = [];
   for (const i of landIdxs) {
     if (flux[i] >= RIVER_THRESHOLD) {
       const nb = downhill[i];
       if (nb !== -1) {
+        const lx1 = microPts[i][0], ly1 = microPts[i][1];
+        const lx2 = microPts[nb][0], ly2 = microPts[nb][1];
+        const rEndX = isLand[nb] ? lx2 : (lx1 + lx2) / 2;
+        const rEndY = isLand[nb] ? ly2 : (ly1 + ly2) / 2;
+        const rPts = fractalizeEdge(lx1, ly1, rEndX, rEndY, heightNoise, 3.5);
+
         rivers.push({
-          x1: microPts[i][0],
-          y1: microPts[i][1],
-          x2: microPts[nb][0],
-          y2: microPts[nb][1],
-          flux: flux[i],
+          x1: lx1, y1: ly1,
+          x2: rEndX,
+          y2: rEndY,
+          flux: flux[i] / RIVER_THRESHOLD,
+          pts: rPts,
         });
       }
     }
@@ -876,5 +1023,6 @@ export function generateProvinces(
     terrainIcons,
     rivers,
     coastlineEdges,
+    coastlinePolygons,
   };
 }
