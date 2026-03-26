@@ -3,6 +3,7 @@ import { TERRAIN_BONUS } from '../constants/gameConfig';
 
 // 개발을 위한 임시 스킬 픽스처
 export const MOCK_SKILLS: Record<string, Skill> = {
+  'basic-attack': { id: 'basic-attack', name: '일반 공격', description: '[t:단일 지정 대상]에게 [v:100%]의 물리 피해를 입힙니다.', range: 1, aoeShape: 'single', aoeRadius: 0, targetType: 'enemy', requiresTarget: true, cost: [], effects: [{type: 'damage', value: 1.0, element: 'none'}] },
   'mock-single': { id: 'mock-single', name: '정밀 타격', description: '[t:단일 대상]에게 [v:200%]의 [a:치명적인 타격 피해]를 입힙니다.', range: 1, aoeShape: 'single', aoeRadius: 0, targetType: 'enemy', requiresTarget: true, cost: [{type: 'mp', amount: 5}], effects: [{type: 'damage', value: 2.0, element: 'strike'}] },
   'mock-cross': { id: 'mock-cross', name: '십자 격파', description: '[t:십자 범위 내 적들]에게 [v:150%]의 [a:타격 피해]를 입힙니다.', range: 3, aoeShape: 'cross', aoeRadius: 1, targetType: 'enemy', requiresTarget: true, cost: [{type: 'mp', amount: 10}], effects: [{type: 'damage', value: 1.5, element: 'strike'}] },
   'mock-cone': { id: 'mock-cone', name: '화염 방사', description: '[t:부채꼴 범위 내 적들]에게 [v:200%]의 [a:화염 타격 피해]를 입힙니다.', range: 3, aoeShape: 'cone', aoeRadius: 2, targetType: 'enemy', requiresTarget: true, cost: [{type: 'mp', amount: 20}], effects: [{type: 'damage', value: 2.0, element: 'fire'}] },

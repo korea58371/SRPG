@@ -2,8 +2,10 @@ import type { StoreSlice, InteractionSlice } from './storeTypes';
 import { MAP_CONFIG, PLAYER_FACTION } from '../../constants/gameConfig';
 import { calcMoveRange, findMovePath } from '../../utils/moveRange';
 import { tileToPixel, buildTileSets } from '../gameStore';
-import { _moveThenAct, _resolveAttack } from '../../engine/combatEngine';
-import { _moveThenAct_Skill, _resolveSkill } from '../../engine/skillEngine';
+import { _moveThenAct, _resolveSkill } from '../../engine/skillEngine';
+
+// 터치/마우스 이벤트 중복 발동으로 인한 빠른 더블클릭 오작동 방지용 타이머
+let lastSelectTime = 0;
 
 export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) => ({
   selectedUnitId: null,
@@ -25,10 +27,12 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
   hoveredUnitId: null,
   fieldMenuPos: null,
   unitListModalOpen: false,
+  isCameraLocked: false,
 
   openFieldMenu: (pos) => set({ fieldMenuPos: pos }),
   closeFieldMenu: () => set({ fieldMenuPos: null }),
   setUnitListModalOpen: (isOpen) => set({ unitListModalOpen: isOpen }),
+  setIsCameraLocked: (locked: boolean) => set({ isCameraLocked: locked }),
 
   clearBattleResult: () => set({ battleResult: null }),
   setHoveredUnitId: (id) => set({ hoveredUnitId: id }),
@@ -39,6 +43,7 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
   cancelSkillTargetMode: () => set({ skillTargetMode: false, selectedSkillId: null }),
 
   selectUnit: (id) => {
+    lastSelectTime = Date.now();
     const s = get();
     if (!id || !s.mapData) {
       set({ selectedUnitId: null, moveRangeTiles: new Set(), previewPath: [] });
@@ -83,6 +88,9 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
   setHoveredMapPixel: (pixel) => set({ hoveredMapPixel: pixel }),
 
   confirmMove: (lx, ly) => {
+    // [BUG FIX] 유닛 선택 직후 너무 빠르게 제자리 이동(확정)이 중복 처리되는 것을 방지
+    if (Date.now() - lastSelectTime < 300) return;
+
     const s = get();
     if (!s.selectedUnitId) return;
     if (s.selectedUnitId !== s.activeUnitId) return; // [BUG FIX] 자신의 턴이 아닌 유닛 조작 차단
@@ -189,7 +197,7 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
       set((s) => ({
         units: { ...s.units, [selectedUnitId]: updatedUnit }
       }));
-      _moveThenAct(selectedUnitId, updatedUnit, dest, px, py, [], null);
+      _moveThenAct(selectedUnitId, updatedUnit, dest, px, py, [], null, null);
     } else if (action === 'ATTACK') {
       get().enterAttackTargetMode();
     } else if (action === 'CANCEL') {
@@ -209,7 +217,13 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
     const py = tileToPixel(dest.ly);
 
     set({ attackTargetMode: false, moveOrigin: null });
-    _moveThenAct(selectedUnitId, unit, dest, px, py, [], targetId);
+    // 평타(일반 공격)는 'basic-attack' 스킬로 통합 처리됩니다.
+    const targetUnit = units[targetId];
+    if (!targetUnit) {
+      get().cancelConfirmedMove();
+      return;
+    }
+    _moveThenAct(selectedUnitId, unit, dest, px, py, [], { lx: targetUnit.logicalX, ly: targetUnit.logicalY }, 'basic-attack');
   },
 
   executeSkillOnTarget: (targetTile) => {
@@ -225,6 +239,6 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
     const py = tileToPixel(dest.ly);
 
     set({ skillTargetMode: false, selectedSkillId: null, attackTargetMode: false, moveOrigin: null });
-    _moveThenAct_Skill(selectedUnitId, unit, dest, px, py, [], targetTile, selectedSkillId);
+    _moveThenAct(selectedUnitId, unit, dest, px, py, [], targetTile, selectedSkillId);
   }
 });

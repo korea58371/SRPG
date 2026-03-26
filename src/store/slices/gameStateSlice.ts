@@ -1,7 +1,7 @@
 import type { StoreSlice, GameStateSlice } from './storeTypes';
 import { TerrainType } from '../../types/gameTypes';
 import type { Unit, UnitType, LevelObjective } from '../../types/gameTypes';
-import { UNIT_CONFIG, BASE_STATS, PLAYER_FACTION } from '../../constants/gameConfig';
+import { UNIT_CONFIG, BASE_STATS, PLAYER_FACTION, MAP_CONFIG, isPlayableTile } from '../../constants/gameConfig';
 import { tileToPixel } from '../gameStore'; // Helper functions from Root store wrapper
 
 export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
@@ -24,6 +24,21 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
     const battleType = get().battleType;
     const newUnits: Record<string, Unit> = {};
     const usedTiles = new Set<string>();
+
+    const findValidEscapeTile = (startX: number, startY: number, stepX: number, stepY: number) => {
+      const mapData = get().mapData;
+      let cx = startX;
+      let cy = startY;
+      while (cx >= 0 && cx < MAP_CONFIG.WIDTH && cy >= 0 && cy < MAP_CONFIG.HEIGHT) {
+        const terrain = mapData?.[cy]?.[cx] ?? TerrainType.GRASS;
+        const valid = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
+        const playable = isPlayableTile(cx, cy, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+        if (playable && valid) return { lx: cx, ly: cy };
+        cx += stepX;
+        cy += stepY;
+      }
+      return { lx: Math.floor(MAP_CONFIG.WIDTH/2), ly: Math.floor(MAP_CONFIG.HEIGHT/2) };
+    };
 
     const getRandomType = (): UnitType => {
       const t: UnitType[] = ['INFANTRY', 'SPEARMAN', 'CAVALRY', 'ARCHER'];
@@ -69,9 +84,10 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
           logicalX: eLx, logicalY: eLy, x: tileToPixel(eLx), y: tileToPixel(eLy), targetX: tileToPixel(eLx), targetY: tileToPixel(eLy), movePath: [], isHero: isHeroE,
         };
       }
+      const target = findValidEscapeTile(0, 0, 1, 1);
       set({ 
         units: newUnits,
-        victoryCondition: { type: 'REACH_LOCATION', description: '화면 좌측 상단(0,0) 좌표로 탈출하라', targetTile: { lx: 0, ly: 0 } },
+        victoryCondition: { type: 'REACH_LOCATION', description: '지정된 위치로 탈출', targetTile: target },
         defeatCondition: { type: 'WIPEOUT_ALLY', description: '아군 부대 전송 실패(전멸)' }
       });
       setTimeout(() => get().endUnitTurn(), 300);
@@ -145,6 +161,11 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
 
     let victory = { type: 'ROUT_ENEMY', description: '적군을 모두 격퇴하라' } as LevelObjective;
     let defeat = { type: 'WIPEOUT_ALLY', description: '아군 전원 전사' } as LevelObjective;
+
+    if (battleType === 'defensive') {
+      const target = findValidEscapeTile(MAP_CONFIG.WIDTH - 1, MAP_CONFIG.HEIGHT - 1, -1, -1);
+      victory = { type: 'REACH_LOCATION', description: '지정된 위치로 탈출', targetTile: target };
+    }
 
     if (battleType === 'offensive') {
       const enemyHeroId = Object.values(newUnits).find(u => u.factionId !== PLAYER_FACTION && u.isHero)?.id;

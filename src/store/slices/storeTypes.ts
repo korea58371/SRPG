@@ -70,10 +70,12 @@ export interface InteractionSlice {
   hoveredUnitId: string | null;
   fieldMenuPos: { x: number; y: number } | null;
   unitListModalOpen: boolean;
+  isCameraLocked: boolean;
 
   openFieldMenu: (pos: { x: number; y: number }) => void;
   closeFieldMenu: () => void;
   setUnitListModalOpen: (isOpen: boolean) => void;
+  setIsCameraLocked: (locked: boolean) => void;
 
   clearBattleResult: () => void;
   setHoveredUnitId: (id: string | null) => void;

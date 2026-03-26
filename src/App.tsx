@@ -15,6 +15,7 @@ import MapObjectsLayer  from './components/MapObjectsLayer';
 import CloudShadow      from './components/CloudShadow';
 import FogLayer         from './components/FogLayer';
 import DynamicGridLayer from './components/DynamicGridLayer';
+import ObjectiveLayer   from './components/ObjectiveLayer';
 import ActionMenu       from './components/ActionMenu';
 import FloatingDamageLayer from './components/FloatingDamageLayer';
 import UnitInfoPanel    from './components/UnitInfoPanel';
@@ -238,7 +239,8 @@ function BattleScreen() {
   // 전투 결과 감지 → appStore로 전달
   useEffect(() => {
     if (!battleResult) return;
-    resolveBattle(battleResult);
+    const isWin = typeof battleResult === 'object' ? battleResult.isVictory : battleResult === 'player_win';
+    resolveBattle(isWin ? 'player_win' : 'player_lose');
     clearBattleResult();
   }, [battleResult, resolveBattle, clearBattleResult]);
 
@@ -336,6 +338,7 @@ function BattleScreen() {
   }, []);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (useGameStore.getState().isCameraLocked) return;
     const ZOOM_SPEED = 0.1;
     setCamera(prev => {
       let newScale = prev.scale - Math.sign(e.deltaY) * ZOOM_SPEED;
@@ -355,11 +358,13 @@ function BattleScreen() {
   }, []);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (useGameStore.getState().isCameraLocked) return;
     isDragging.current = true;
     lastPos.current = { x: e.clientX, y: e.clientY };
   }, []);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (useGameStore.getState().isCameraLocked) return;
     if (!isDragging.current) return;
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
@@ -397,6 +402,11 @@ function BattleScreen() {
     let lastTime = performance.now();
     const updateCamera = (time: number) => {
       rafRef.current = requestAnimationFrame(updateCamera);
+      if (useGameStore.getState().isCameraLocked) {
+        lastTime = time; 
+        return;
+      }
+      
       const dt = time - lastTime;
       lastTime = time;
 
@@ -426,28 +436,65 @@ function BattleScreen() {
     };
   }, []);
 
-  // ─── 턴 시작 시 활성 유닛으로 자동 카메라 포커스 ───
+  // ─── 턴 시작 시 활성 유닛 또는 특수 목표 자동 카메라 포커스 ───
+  const hasShownIntroRef = useRef(false);
+
   useEffect(() => {
     if (!activeUnitId) return;
-    const unit = useGameStore.getState().units[activeUnitId];
+    const store = useGameStore.getState();
+    const unit = store.units[activeUnitId];
     if (!unit) return;
+    
+    // 만약 첫 턴이고 위치 도달 목표(탈출)이며 아직 인트로 패닝을 안 보여줬다면
+    const v = store.victoryCondition;
+    if (store.turnNumber === 1 && v?.type === 'REACH_LOCATION' && v.targetTile && !hasShownIntroRef.current) {
+      hasShownIntroRef.current = true;
+      store.setIsCameraLocked(true);
 
-    // 1. 유닛의 로지컬 픽셀 공간 좌표
+      const tx = v.targetTile.lx * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+      const ty = v.targetTile.ly * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+      const angle = Math.PI / 4;
+      const rx = tx * Math.cos(angle) - ty * Math.sin(angle);
+      const ry = tx * Math.sin(angle) + ty * Math.cos(angle);
+      const ix = rx;
+      const iy = ry * 0.5;
+
+      setCamera(prev => clampCamera({
+        ...prev,
+        x: window.innerWidth / 2 - ix * prev.scale,
+        y: window.innerHeight / 2 - iy * prev.scale,
+      }));
+
+      // 1.5초 후 현재 턴을 가진 영웅에게 포커스를 맞추며 락 해제
+      setTimeout(() => {
+        const ux = unit.logicalX * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+        const uy = unit.logicalY * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+        const urx = ux * Math.cos(angle) - uy * Math.sin(angle);
+        const ury = ux * Math.sin(angle) + uy * Math.cos(angle);
+        
+        setCamera(prev => clampCamera({
+          ...prev,
+          x: window.innerWidth / 2 - urx * prev.scale,
+          y: window.innerHeight / 2 - (ury * 0.5) * prev.scale,
+        }));
+        
+        useGameStore.getState().setIsCameraLocked(false);
+      }, 1500);
+
+      return;
+    }
+
+    // 그 외 일반적인 포커스 시퀀스
     const worldX = unit.logicalX * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
     const worldY = unit.logicalY * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-
-    // 2. 쿼터뷰(Isometric) 렌더링 파이프라인 수동 시뮬레이션
-    //  a. 회전 (Math.PI / 4)
     const angle = Math.PI / 4;
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
     const rx = worldX * cosA - worldY * sinA;
     const ry = worldX * sinA + worldY * cosA;
-    //  b. 스케일 압축 (1, 0.5)
     const ix = rx * 1;
     const iy = ry * 0.5;
 
-    // 3. 현재 스케일을 기준으로 화면 정중앙에 위치하도록 Camera 포지션 세팅
     setCamera(prev => clampCamera({
       ...prev,
       x: window.innerWidth / 2 - ix * prev.scale,
@@ -538,6 +585,7 @@ function BattleScreen() {
               <PathLayer />
               
               {/* Entity Layout Nodes (Z-Index 기반 혼합 정렬됨) */}
+              <ObjectiveLayer />
               <MapObjectsLayer />
               <UnitsLayer />
               

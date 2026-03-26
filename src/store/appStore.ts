@@ -167,6 +167,17 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       }
     }
 
+    // [BUG FIX] 치트 모드이거나 영토 데이터가 전혀 없는 경우, checkVictory 연산을 건너뛰어 배드엔딩 오작동을 방지
+    if (pendingBattle.isCheat || Object.keys(newProvinces).length === 0) {
+      set({
+        pendingBattle: null,
+        lastBattleOutcome: outcome,
+        screen: 'BATTLE_RESULT',
+        endingType: null,
+      });
+      return;
+    }
+
     const victory = checkVictory(newProvinces);
     set({
       provinces: newProvinces,

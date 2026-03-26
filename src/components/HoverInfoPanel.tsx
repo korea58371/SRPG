@@ -1,10 +1,9 @@
 import React from 'react';
 import { useGameStore, manhattan } from '../store/gameStore';
 import { TerrainType } from '../types/gameTypes';
-import { TERRAIN_BONUS, MAP_CONFIG, UNIT_RESISTANCES } from '../constants/gameConfig';
+import { TERRAIN_BONUS, MAP_CONFIG } from '../constants/gameConfig';
 import { MOCK_SKILLS, isSkillTargetValid } from '../utils/skillTargeting';
-import { calcBaseDamage } from '../engine/combatEngine';
-import { getEffectiveStat } from '../engine/statEngine';
+import { calcBaseDamage, getEffectiveStat } from '../engine/statEngine';
 
 const terrainNameMap: Record<TerrainType, string> = {
   [TerrainType.GRASS]: '평지',
@@ -86,7 +85,7 @@ export default function HoverInfoPanel() {
           const dist = manhattan(dest.lx, dest.ly, lx, ly);
           // +1은 기본 attackRange 보정 (대각선 타격 등 허용거리)
           if (isEnemy && dist <= attacker.attackRange + 1) { 
-            const { base: baseDmgRaw, isWeak, isResist } = calcBaseDamage(attacker, hoveredUnit, units);
+            const { base: baseDmgRaw, isWeak, isResist } = calcBaseDamage(attacker, hoveredUnit, units, 'none', 1.0);
             const baseDmg = Math.round(baseDmgRaw);
             expectedAmount = baseDmg;
             const minDmg = Math.max(1, Math.round(baseDmg * 0.9));
@@ -120,17 +119,8 @@ export default function HoverInfoPanel() {
         if (skill && validation.valid && validTarget) {
           const dmgEffect = skill.effects.find(e => e.type === 'damage');
           if (dmgEffect) {
-            const attackElement = dmgEffect.element || 'none';
-            const resistMap = UNIT_RESISTANCES[hoveredUnit.unitType];
-            const elementalMult = (resistMap && attackElement in resistMap) 
-              ? (resistMap[attackElement as keyof typeof resistMap] || 1.0) 
-              : 1.0;
-            const isWeak = elementalMult > 1.0;
-            const isResist = elementalMult < 1.0;
-            const atk = getEffectiveStat(attacker, 'attack');
-            const def = getEffectiveStat(hoveredUnit, 'defense');
-            const rawDmg = Math.max(1, (atk * (dmgEffect.value || 1) * elementalMult) - (def * 0.5));
-            const dmg = Math.round(rawDmg);
+            const { base: baseDmgRaw, isWeak, isResist } = calcBaseDamage(attacker, hoveredUnit, units, dmgEffect.element, dmgEffect.value || 1.0);
+            const dmg = Math.round(baseDmgRaw);
             expectedAmount = dmg;
             damagePreview = (
               <div className="mt-1 text-purple-300 text-sm border-t border-gray-600 pt-1">

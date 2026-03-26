@@ -1,11 +1,10 @@
 import { useGameStore } from '../store/gameStore';
 import type { Unit, TilePos } from '../types/gameTypes';
-import { MAP_CONFIG, isPlayableTile, UNIT_RESISTANCES } from '../constants/gameConfig';
+import { MAP_CONFIG, isPlayableTile } from '../constants/gameConfig';
 import { getAoETiles, MOCK_SKILLS } from '../utils/skillTargeting';
 import { tileToPixel } from '../store/gameStore';
-import { getEffectiveStat } from './statEngine';
+import { getEffectiveStat, calcDamage } from './statEngine';
 import type { ActiveBuff } from '../types/gameTypes';
-
 // ─── 스킬 처리 핵심 로직 ───────────────────────────────────────────────────────
 export function _resolveSkill(
   attackerId: string,
@@ -58,30 +57,22 @@ export function _resolveSkill(
     if (effect.type === 'damage') {
       for (const target of affectedUnits) {
         hitCount++;
-        const attackElement = effect.element || 'none';
-        const resistMap = UNIT_RESISTANCES[target.unitType];
-        const elementalMult = (resistMap && attackElement in resistMap) 
-          ? (resistMap[attackElement as keyof typeof resistMap] || 1.0) 
-          : 1.0;
-        const isWeak = elementalMult > 1.0;
-        const isResist = elementalMult < 1.0;
+        const { dmg, isWeak, isResist } = calcDamage(caster, target, s.units, effect.element, effect.value || 1.0);
 
-        const atk = getEffectiveStat(caster, 'attack');
-        const def = getEffectiveStat(target, 'defense');
-        const rawDmg = Math.max(1, (atk * (effect.value || 1) * elementalMult) - (def * 0.5));
-        const dmg = Math.round(rawDmg);
         const prevState = newUnits[target.id] || target;
         const newHp = Math.max(0, prevState.hp - dmg);
         const newState = newHp <= 0 ? 'DEAD' : prevState.state;
         const targetRage = Math.min(100, prevState.rage + 10);
         newUnits[target.id] = { ...prevState, hp: newHp, state: newState as any, rage: targetRage };
         
+        const isCrit = dmg >= getEffectiveStat(caster, 'attack') * 0.95;
+
         floatings.push({
           id: `fd-${Date.now()}-${Math.random()}`,
           x: tileToPixel(target.logicalX),
           y: tileToPixel(target.logicalY) - 15,
           value: dmg,
-          isCrit: true,
+          isCrit,
           isWeak,
           isResist
         });
@@ -271,15 +262,15 @@ export function _resolveSkill(
   }, skipDelay);
 }
 
-export function _moveThenAct_Skill(
+export function _moveThenAct(
   selfId: string,
   unit: Unit,
   dest: TilePos,
   px: number,
   py: number,
   waypoints: TilePos[],
-  targetTile: TilePos,
-  skillId: string,
+  targetTile: TilePos | null,
+  skillId: string | null,
 ) {
   const isSkip = useGameStore.getState().isCtrlPressed;
   const MOVE_MS = isSkip ? 0 : waypoints.length * 150 + 100;
@@ -315,24 +306,44 @@ export function _moveThenAct_Skill(
       units: { ...s2.units, [selfId]: { ...s2.units[selfId], x: px, y: py, targetX: px, targetY: py } }
     }));
 
+    if (!skillId || !targetTile) {
+      useGameStore.getState().endUnitTurn();
+      return;
+    }
+
     if (isSkip) {
       _resolveSkill(selfId, targetTile, skillId);
       return;
     }
 
+    const dx = tileToPixel(targetTile.lx) - px;
+    const dy = tileToPixel(targetTile.ly) - py;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const BUMP = 18;
+
     useGameStore.setState(s2 => ({
-      units: { ...s2.units, [selfId]: { ...s2.units[selfId], state: 'ATTACKING', targetY: py - 20 } },
+      units: {
+        ...s2.units,
+        [selfId]: {
+          ...s2.units[selfId],
+          state: 'ATTACKING',
+          targetX: px + (dx / len) * BUMP,
+          targetY: py + (dy / len) * BUMP,
+        },
+      },
+      isMoveAnimating: true,
     }));
 
     setTimeout(() => {
       useGameStore.setState(s2 => ({
-        units: { ...s2.units, [selfId]: { ...s2.units[selfId], targetY: py } },
+        units: { ...s2.units, [selfId]: { ...s2.units[selfId], targetX: px, targetY: py } }
       }));
     }, 200);
 
     setTimeout(() => {
+      useGameStore.setState({ isMoveAnimating: false });
       _resolveSkill(selfId, targetTile, skillId);
-    }, 400);
+    }, 350);
 
   }, MOVE_MS);
 }

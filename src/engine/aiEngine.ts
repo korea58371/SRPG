@@ -2,7 +2,7 @@ import { useGameStore } from '../store/gameStore';
 import { MAP_CONFIG, PLAYER_FACTION } from '../constants/gameConfig';
 import { calcMoveRange, findMovePath } from '../utils/moveRange';
 import { getAttackableTargets, buildTileSets, chebyshevDist, tileToPixel } from '../store/gameStore'; // 나중에 util로 뺄 수 있음
-import { _resolveAttack } from './combatEngine';
+import { _resolveSkill } from './skillEngine';
 
 // ─── 단일 적 AI ───────────────────────────────────────────────────────────────
 export async function _runSingleEnemyAI(
@@ -95,7 +95,7 @@ export async function _runSingleEnemyAI(
     const target = targets[0];
 
     if (isSkip) {
-      _resolveAttack(afterEnemy, target, enemyId, target.id, useGameStore.getState().units);
+      _resolveSkill(enemyId, { lx: target.logicalX, ly: target.logicalY }, 'basic-attack');
     } else {
       const px = tileToPixel(afterEnemy.logicalX);
       const py = tileToPixel(afterEnemy.logicalY);
@@ -131,7 +131,7 @@ export async function _runSingleEnemyAI(
         if (!a2 || !d2 || d2.state === 'DEAD') {
           useGameStore.getState().endUnitTurn();
         } else {
-          _resolveAttack(a2, d2, enemyId, target.id, cur2.units);
+          _resolveSkill(enemyId, { lx: target.logicalX, ly: target.logicalY }, 'basic-attack');
         }
       }, 450);
     }
