@@ -2,10 +2,12 @@ import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { Delaunay } from 'd3-delaunay';
 import { generateProvinces } from '../utils/provinceGenerator';
 import { useAppStore } from '../store/appStore';
+import { useGameStore } from '../store/gameStore';
 import type { Province } from '../types/appTypes';
 import { FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
-import { Stage, Container, Graphics as PixiGraphics, Text as PixiText, Sprite } from '@pixi/react';
+import { Stage, Container, Graphics as PixiGraphics, Text as PixiText, Sprite, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
+import HeroListModal from '../components/HeroListModal';
 
 // 지형 스프라이트 매니페스트 (public/assets/ui/terrain/ 기반)
 const TERRAIN_MANIFEST: Record<string, string[]> = {
@@ -96,122 +98,163 @@ export const StrategyMapScreen = () => {
   const [scale, setScale] = useState(initialFitScale);
   const [position, setPosition] = useState(initialPosition);
 
-  // 목표(Target) 위치로 부드럽게 쫓아가는 Lerp 애니메이션용 변수
-  const [targetScale, setTargetScale] = useState(initialFitScale);
-  const [targetPosition, setTargetPosition] = useState(initialPosition);
+  // 목표(Target) 위치로 부드럽게 쫓아가는 Lerp 애니메이션용 Ref (리렌더링 유발 X)
+  const targetScaleRef = useRef(initialFitScale);
+  const targetPositionRef = useRef(initialPosition);
+  
+  // 실제 PIXI Container를 직접 조작하는 Ref (React 렌더링 완전 바이패스)
+  const pixiContainerRef = useRef<PIXI.Container | null>(null);
+  
+  // Tweening 로직과 드래그 거리 계산용 즉시 접근 가능 Ref
+  const currentScaleRef = useRef(initialFitScale);
+  const currentPositionRef = useRef(initialPosition);
 
   const [isDraggingMap, setIsDraggingMap] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const isDraggingMapRef = useRef(false);
+  // dragStart를 ref로 관리: setState의 비동기 특성으로 인한 stale 값 문제 방지
+  const dragStartRef = useRef({ x: 0, y: 0 });
 
   // 드래그/클릭 오인 방지용 ref
-  // - hasDragged: pointerDown~Up 사이에 실제 이동(>4px)이 있었는지 추적
-  // - pointerDownPos: 최초 눌린 위치 (이동 거리 계산 기준)
   const hasDragged = useRef(false);
   const pointerDownPos = useRef({ x: 0, y: 0 });
 
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 화면 밖으로 튕겨나가지 않도록 좌표를 클램프(Clamp)하는 보조 함수
-  const getClampedPosition = (newX: number, newY: number, currentScale: number) => {
-    const mapW = SVG_W * currentScale;
-    const mapH = SVG_H * currentScale;
-
-    let cx = newX;
-    let cy = newY;
-
-    // 가로 스크롤 한계 (맵이 화면보다 넓을 때만 작동, 작으면 무조건 중앙)
+  const getClampedPosition = useCallback((newX: number, newY: number, sc: number) => {
+    const mapW = SVG_W * sc;
+    const mapH = SVG_H * sc;
+    let cx = newX, cy = newY;
     if (mapW > dimensions.w) {
       cx = Math.max(dimensions.w - mapW, Math.min(0, cx));
     } else {
       cx = (dimensions.w - mapW) / 2;
     }
-
-    // 세로 스크롤 한계
     if (mapH > dimensions.h) {
       cy = Math.max(dimensions.h - mapH, Math.min(0, cy));
     } else {
       cy = (dimensions.h - mapH) / 2;
     }
-
     return { x: cx, y: cy };
-  };
+  }, [dimensions]);
 
-  // --- 부드러운 Tweening (Lerp) 루프 ---
+
   useEffect(() => {
-    let frameId: number;
-    const animate = () => {
-      if (!isDraggingMap) {
-        setScale(prev => {
-          const ds = targetScale - prev;
-          return Math.abs(ds) < 0.001 ? targetScale : prev + ds * 0.2;
-        });
-        setPosition(prev => {
-          const dx = targetPosition.x - prev.x;
-          const dy = targetPosition.y - prev.y;
-          if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) return targetPosition;
-          return { x: prev.x + dx * 0.2, y: prev.y + dy * 0.2 };
-        });
-      }
-      frameId = requestAnimationFrame(animate);
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomIn = e.deltaY < 0;
+      const factor = zoomIn ? 1.25 : 0.8;
+
+      const minScale = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
+      const newTargetScale = Math.min(Math.max(targetScaleRef.current * factor, minScale), 8);
+
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+
+      const localX = (cursorX - targetPositionRef.current.x) / targetScaleRef.current;
+      const localY = (cursorY - targetPositionRef.current.y) / targetScaleRef.current;
+
+      const newTargetX = cursorX - localX * newTargetScale;
+      const newTargetY = cursorY - localY * newTargetScale;
+
+      targetScaleRef.current = newTargetScale;
+      targetPositionRef.current = getClampedPosition(newTargetX, newTargetY, newTargetScale);
     };
-    frameId = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frameId);
-  }, [targetScale, targetPosition, isDraggingMap]);
 
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const zoomIn = e.deltaY < 0;
-    const factor = zoomIn ? 1.25 : 0.8;
+    const node = containerRef.current;
+    if (node) {
+      node.addEventListener('wheel', handleWheel, { passive: false });
+    }
+    
+    return () => {
+      if (node) node.removeEventListener('wheel', handleWheel);
+    };
+  }, [dimensions, getClampedPosition]);
 
-    // 긴 폭 기준 맞춤 스케일 이하로 축소되는 것을 방지 (여백 생기지 않도록)
-    const minScale = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
-    const newTargetScale = Math.min(Math.max(targetScale * factor, minScale), 8);
+  // --- PIXI useTick: React 렌더링 없이 매 프레임 PIXI Container 직접 변형 ---
+  const SceneController = () => {
+    useTick((delta) => {
+      const container = pixiContainerRef.current;
+      if (!container) return;
 
-    // 마우스 포인터를 향해 줌
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
+      if (isDraggingMapRef.current) {
+        container.x = currentPositionRef.current.x;
+        container.y = currentPositionRef.current.y;
+        container.scale.set(currentScaleRef.current);
+      } else {
+        // 레이트 독립적 Lerp 보간
+        const lerpFactor = Math.min(1, 0.18 * delta);
+        const ds = targetScaleRef.current - currentScaleRef.current;
+        if (Math.abs(ds) > 0.0005) {
+          currentScaleRef.current += ds * lerpFactor;
+        } else {
+          currentScaleRef.current = targetScaleRef.current;
+        }
 
-    const localX = (cursorX - targetPosition.x) / targetScale;
-    const localY = (cursorY - targetPosition.y) / targetScale;
+        const dpx = targetPositionRef.current.x - currentPositionRef.current.x;
+        const dpy = targetPositionRef.current.y - currentPositionRef.current.y;
+        if (Math.abs(dpx) > 0.05 || Math.abs(dpy) > 0.05) {
+          currentPositionRef.current.x += dpx * lerpFactor;
+          currentPositionRef.current.y += dpy * lerpFactor;
+        } else {
+          currentPositionRef.current.x = targetPositionRef.current.x;
+          currentPositionRef.current.y = targetPositionRef.current.y;
+        }
 
-    const newTargetX = cursorX - localX * newTargetScale;
-    const newTargetY = cursorY - localY * newTargetScale;
+        container.x = currentPositionRef.current.x;
+        container.y = currentPositionRef.current.y;
+        container.scale.set(currentScaleRef.current);
+      }
 
-    setTargetScale(newTargetScale);
-    setTargetPosition(getClampedPosition(newTargetX, newTargetY, newTargetScale));
+      // 텍스트 컴포넌트의 1/scale 보정을 위해 주기적 state 동기화
+      if (Math.abs(currentScaleRef.current - scale) > 0.01) {
+        setScale(currentScaleRef.current);
+        setPosition({ x: currentPositionRef.current.x, y: currentPositionRef.current.y });
+      }
+    });
+    return null;
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     setIsDraggingMap(true);
+    isDraggingMapRef.current = true;
     hasDragged.current = false;
     pointerDownPos.current = { x: e.clientX, y: e.clientY };
-    setDragStart({ x: e.clientX, y: e.clientY });
+    dragStartRef.current = { x: e.clientX, y: e.clientY }; // ref: 즉시 갱신
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    // 1. 드래그 이동 (영역 밖 클램핑 적용 및 패닝 딜레이 제거)
-    if (isDraggingMap) {
+    // 1. 드래그 이동
+    if (isDraggingMapRef.current) {
       const mdx = e.clientX - pointerDownPos.current.x;
       const mdy = e.clientY - pointerDownPos.current.y;
-      // 4px 이상 이동했을 때만 드래그로 판정 (미세 오탐 방지)
+      
       if (mdx * mdx + mdy * mdy > 16) hasDragged.current = true;
 
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      const newPos = getClampedPosition(position.x + dx, position.y + dy, scale);
-      setPosition(newPos);     // 패닝 시에는 딜레이 없이 즉각 UI 업데이트
-      setTargetPosition(newPos); // 목표치도 일치시켜서 드래그 놓았을때 미끄러짐 방지
-      setDragStart({ x: e.clientX, y: e.clientY });
+      // ref 기준으로 즉시 연산: React setState 비동기 지연 없음
+      const dx = e.clientX - dragStartRef.current.x;
+      const dy = e.clientY - dragStartRef.current.y;
+      
+      const newPos = getClampedPosition(currentPositionRef.current.x + dx, currentPositionRef.current.y + dy, currentScaleRef.current);
+      
+      currentPositionRef.current = newPos;      // 내부 로직 즉시 갱신
+      targetPositionRef.current = newPos;       // 미끄러짐(스냅) 방지
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      // 큌: 드래그 중 setPosition 호출 제거!
+      // SceneController의 useTick이 매 프레임 PIXI Container를 직접 업데이트하므로 React 리렌더링 전혀 불필요
+
+      return;
     }
 
     // 2. 호버 탐지 (Delaunay Raycasting, O(1) 수준 초고속)
     if (containerRef.current && delaunayFinder && parsedCells) {
       const rect = containerRef.current.getBoundingClientRect();
-      const localX = (e.clientX - rect.left - position.x) / scale;
-      const localY = (e.clientY - rect.top - position.y) / scale;
+      // 항상 최신 캔버스 오프셋을 가진 참조 변수 사용
+      const localX = (e.clientX - rect.left - currentPositionRef.current.x) / currentScaleRef.current;
+      const localY = (e.clientY - rect.top - currentPositionRef.current.y) / currentScaleRef.current;
 
       const cellIndex = delaunayFinder.find(localX, localY);
       if (cellIndex !== undefined && cellIndex >= 0 && cellIndex < parsedCells.length) {
@@ -237,6 +280,9 @@ export const StrategyMapScreen = () => {
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     setIsDraggingMap(false);
+    isDraggingMapRef.current = false;
+    // 드래그 종료 시 1회만 state 동기화 (지형 컸링 등 React 렌더링이 필요한 구맴의 정확한 개신 보장)
+    setPosition({ x: currentPositionRef.current.x, y: currentPositionRef.current.y });
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
@@ -812,21 +858,25 @@ export const StrategyMapScreen = () => {
   const LOD_THRESHOLD = fitScale * 1.6;
 
   // 맵 영역 바깥을 덮는 마스킹 레이어
+  // position/scale을 실시사이 ref로 참조하여 SceneController의 주기적 state 동기화에만 어웈리도뷙 (pan/zoom 저 fps 연쇄 제거)
   const drawMask = useCallback((g: PIXI.Graphics) => {
     g.clear();
-    const mapLeft   = position.x;
-    const mapTop    = position.y;
-    const mapRight  = position.x + SVG_W * scale;
-    const mapBottom = position.y + SVG_H * scale;
+    const px = currentPositionRef.current.x;
+    const py = currentPositionRef.current.y;
+    const sc = currentScaleRef.current;
+    const mapLeft   = px;
+    const mapTop    = py;
+    const mapRight  = px + SVG_W * sc;
+    const mapBottom = py + SVG_H * sc;
     const W = dimensions.w;
     const H = dimensions.h;
     g.beginFill(0x000000, 1);
-    if (mapLeft > 0)  g.drawRect(0, 0, mapLeft, H);
-    if (mapRight < W) g.drawRect(mapRight, 0, W - mapRight, H);
-    if (mapTop > 0)   g.drawRect(mapLeft, 0, SVG_W * scale, mapTop);
-    if (mapBottom < H) g.drawRect(mapLeft, mapBottom, SVG_W * scale, H - mapBottom);
+    if (mapLeft > 0)   g.drawRect(0, 0, mapLeft, H);
+    if (mapRight < W)  g.drawRect(mapRight, 0, W - mapRight, H);
+    if (mapTop > 0)    g.drawRect(mapLeft, 0, SVG_W * sc, mapTop);
+    if (mapBottom < H) g.drawRect(mapLeft, mapBottom, SVG_W * sc, H - mapBottom);
     g.endFill();
-  }, [position, scale, dimensions]);
+  }, [dimensions]);
 
   // 통합 경계선 공용 알파 필터 (모든 선이 수학적으로 덮어쓴 후 렌더링되므로// removed combinedBordersFilter
   // LOD 페이드 인/아웃 알파 블렌딩
@@ -866,7 +916,6 @@ export const StrategyMapScreen = () => {
           width: '100%',
           height: '100vh',
         }}
-        onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -879,14 +928,18 @@ export const StrategyMapScreen = () => {
           height={dimensions.h}
           options={{
             backgroundColor: 0xa5967d,
-            resolution: typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2,
+            // Math.max(..., 2) 제거: HiDPI가 아닌 모니터에서 2x 강제 적용 제거 (렌더링 픽셀 수 절반으로 감소)
+            resolution: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
             autoDensity: true,
             antialias: false,
           }}
           style={{ width: '100%', height: '100%', display: 'block' }}
         >
-          {/* Main Transformation Container */}
-          <Container scale={scale} position={[position.x, position.y]} sortableChildren={true}>
+          {/* SceneController: React 리렌더링 없이 PIXI Container를 매 프레임 직접 조작 */}
+          <SceneController />
+
+          {/* Main Transformation Container - ref로 직접 조작 (scale/position props 최소화) */}
+          <Container ref={pixiContainerRef} sortableChildren={true}>
 
             {/* 1. Base Map - 강제 고정 */}
             <Container name="L1-BaseMap" zIndex={10}>
@@ -1139,13 +1192,25 @@ export const StrategyMapScreen = () => {
         </div>
       )}
 
-      {/* 우측 하단 턴 종료 버튼 */}
-      <button
-        onClick={(e) => { e.stopPropagation(); endStrategyTurn(); }}
-        className="absolute bottom-6 right-6 px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white rounded font-bold border-2 border-amber-500 shadow-xl z-30 smap-btn-anim transition-all"
-      >
-        ⏭ 턴 종료 <span className="ml-1 text-amber-200 opacity-80">({strategyTurn})</span>
-      </button>
+      {/* 우측 하단 턴 종료 및 인물록 버튼 그룹 */}
+      <div className="absolute bottom-6 right-6 flex items-center gap-3 z-30 pointer-events-auto">
+        <button
+          onClick={(e: React.MouseEvent) => { e.stopPropagation(); useGameStore.getState().setHeroListModalOpen(true); }}
+          className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold border-2 border-slate-500 shadow-xl smap-btn-anim transition-all flex items-center gap-2"
+        >
+          <span className="text-lg">📜</span> 인물록
+        </button>
+
+        <button
+          onClick={(e) => { e.stopPropagation(); endStrategyTurn(); }}
+          className="px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white rounded font-bold border-2 border-amber-500 shadow-xl smap-btn-anim transition-all"
+        >
+          ⏭ 턴 종료 <span className="ml-1 text-amber-200 opacity-80">({strategyTurn})</span>
+        </button>
+      </div>
+
+      {/* 모달 */}
+      <HeroListModal />
 
     </div>
   );

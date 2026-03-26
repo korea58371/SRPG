@@ -27,11 +27,12 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
   hoveredUnitId: null,
   fieldMenuPos: null,
   unitListModalOpen: false,
+  heroListModalOpen: false,
   isCameraLocked: false,
-
   openFieldMenu: (pos) => set({ fieldMenuPos: pos }),
   closeFieldMenu: () => set({ fieldMenuPos: null }),
   setUnitListModalOpen: (isOpen) => set({ unitListModalOpen: isOpen }),
+  setHeroListModalOpen: (isOpen) => set({ heroListModalOpen: isOpen }),
   setIsCameraLocked: (locked: boolean) => set({ isCameraLocked: locked }),
 
   clearBattleResult: () => set({ battleResult: null }),

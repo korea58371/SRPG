@@ -3,6 +3,8 @@ import type { Unit, TerrainType, MapObjectData, BattleType, TilePos, FactionId, 
 import type { MapInfo } from '../../utils/mapGenerator';
 import type { BattleOutcome } from '../../types/appTypes';
 
+import type { Character, City } from '../../types/characterTypes';
+
 export type ActionMenuType = 'ATTACK' | 'SKILL' | 'ITEM' | 'WAIT' | 'CANCEL';
 
 export interface FloatingDamage {
@@ -39,6 +41,30 @@ export interface GameStateSlice {
   initUnits: (mapWidth: number, mapHeight: number, attackerFactionId: FactionId, defenderFactionId: FactionId) => void;
 }
 
+export type PhaseType = 'STRATEGY' | 'BATTLE' | 'EVENT';
+
+export interface CampaignSlice {
+  year: number;
+  month: number;
+  currentPhase: PhaseType;
+  playerFactionId: FactionId | null; // 플레이어가 이끄는 주력 세력
+  domainCities: Record<string, City>; // 전역 도시(거점) 내정 데이터
+  
+  advanceTime: (months?: number) => void; // 시간 흐름
+  setPhase: (phase: PhaseType) => void;
+  setPlayerFaction: (factionId: FactionId) => void;
+  updateCityDevelopment: (cityId: string, amount: number) => void;
+}
+
+export interface CharacterSlice {
+  characters: Record<string, Character>;
+  
+  addCharacter: (char: Character) => void;
+  updateCharacterState: (id: string, newState: Character['state']) => void;
+  updateAffinity: (idA: string, idB: string, amount: number) => void;
+  killCharacter: (id: string) => void;
+}
+
 export interface TurnSystemSlice {
   activeUnitId: string | null;
   turnNumber: number;
@@ -70,11 +96,13 @@ export interface InteractionSlice {
   hoveredUnitId: string | null;
   fieldMenuPos: { x: number; y: number } | null;
   unitListModalOpen: boolean;
+  heroListModalOpen: boolean;
   isCameraLocked: boolean;
 
   openFieldMenu: (pos: { x: number; y: number }) => void;
   closeFieldMenu: () => void;
   setUnitListModalOpen: (isOpen: boolean) => void;
+  setHeroListModalOpen: (isOpen: boolean) => void;
   setIsCameraLocked: (locked: boolean) => void;
 
   clearBattleResult: () => void;
@@ -97,7 +125,7 @@ export interface InteractionSlice {
   executeSkillOnTarget: (targetTile: TilePos) => void;
 }
 
-export type RootState = GameStateSlice & TurnSystemSlice & InteractionSlice;
+export type RootState = GameStateSlice & TurnSystemSlice & InteractionSlice & CampaignSlice & CharacterSlice;
 
 // 제네릭 StateCreator 축약타입 (미들웨어 없이 순수 기능)
 export type StoreSlice<T> = StateCreator<RootState, [], [], T>;

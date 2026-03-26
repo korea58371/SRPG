@@ -8,6 +8,8 @@ import type { RootState } from './slices/storeTypes';
 import { createGameStateSlice } from './slices/gameStateSlice';
 import { createTurnSystemSlice } from './slices/turnSystemSlice';
 import { createInteractionSlice } from './slices/interactionSlice';
+import { createCampaignSlice } from './slices/campaignSlice';
+import { createCharacterSlice } from './slices/characterSlice';
 
 export * from './slices/storeTypes';
 // ─── 유틸리티 함수들 (스토어 밖에서 사용됨) ──────────────────────────────────
@@ -71,4 +73,6 @@ export const useGameStore = create<RootState>((...a) => ({
   ...createGameStateSlice(...a),
   ...createTurnSystemSlice(...a),
   ...createInteractionSlice(...a),
+  ...createCampaignSlice(...a),
+  ...createCharacterSlice(...a),
 }));
