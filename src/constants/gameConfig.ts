@@ -1,6 +1,7 @@
 // J:/AI/Game/SRPG/src/constants/gameConfig.ts
 
 import { TerrainType } from '../types/gameTypes';
+import type { DamageAttribute, UnitType } from '../types/gameTypes';
 
 // 맵 및 타일 관련 설정
 export const MAP_CONFIG = {
@@ -98,12 +99,22 @@ export const UNIT_MATCHUPS = {
   ARCHER: { advantage: 'NONE', disadvantage: 'NONE', bonus: 0 },
 };
 
-export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number; moveSteps: number }> = {
-  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 40, attackRange: 1, moveSteps: 4 }, // 보병: 이동 4칸
-  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 30, attackRange: 2, moveSteps: 3 }, // 창병: 이동 3칸 (느림)
-  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 50, attackRange: 1, moveSteps: 6 }, // 기병: 이동 6칸 (빠름)
-  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 40, attackRange: 3, moveSteps: 4 }, // 궁병: 이동 4칸
-  GENERAL:  { hp: 80,  attack: 10, defense: 12, speed: 30, attackRange: 1, moveSteps: 3 }, // 장수: 이동 3칸
+// 유닛별 데미지 속성 피격 약점/저항 딕셔너리 (Damage Multipliers)
+// 정의되지 않은 속성은 무조건 기본 1.0(100%) 피해
+export const UNIT_RESISTANCES: Record<UnitType, Partial<Record<DamageAttribute, number>>> = {
+  INFANTRY: { fire: 1.5, earth: 1.5, pierce: 0.5 }, // 보병: 마법계(화염/대지) 150% 치명적, 찌르기 50% 약화
+  SPEARMAN: { fire: 1.5, slash: 0.5 },              // 창병: 보병과 유사하나 베기(slash)에 저항
+  CAVALRY:  { pierce: 2.0, slash: 0.5 },            // 기병: 찌르기 200% 약점, 베기 50% 약화
+  ARCHER:   { slash: 1.5, strike: 1.5 },            // 궁병: 근접 물리(베기/타격) 150% 
+  GENERAL:  {}                                      // 장수: 모든 데미지 100% 정상 (보스급)
+};
+
+export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number; moveSteps: number; baseAttackElement: DamageAttribute }> = {
+  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 40, attackRange: 1, moveSteps: 4, baseAttackElement: 'slash' }, // 보병: 이동 4칸
+  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 30, attackRange: 2, moveSteps: 3, baseAttackElement: 'pierce' }, // 창병: 이동 3칸 (느림)
+  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 50, attackRange: 1, moveSteps: 6, baseAttackElement: 'pierce' }, // 기병: 이동 6칸 (빠름)
+  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 40, attackRange: 3, moveSteps: 4, baseAttackElement: 'pierce' }, // 궁병: 이동 4칸
+  GENERAL:  { hp: 80,  attack: 10, defense: 12, speed: 30, attackRange: 1, moveSteps: 3, baseAttackElement: 'slash' }, // 장수: 이동 3칸
 };
 
 // ─ CT(Charge Time) 시스템 ─────────────────────────────────────────

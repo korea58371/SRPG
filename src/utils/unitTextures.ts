@@ -32,6 +32,7 @@ export function getUnitTypeTexture(unitType: string): PIXI.Texture {
   ctx.fillText(UNIT_ICONS[unitType] ?? '?', SIZE / 2, SIZE / 2 + 1);
 
   const texture = PIXI.Texture.from(canvas);
+  texture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
   cache.set(unitType, texture);
   return texture;
 }

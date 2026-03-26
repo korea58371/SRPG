@@ -19,6 +19,7 @@ export default function TerrainMap() {
     // mapData를 이용해 단색 기반 캔버스 텍스처를 구워냄
     const canvas = generateMapTexture(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, MAP_CONFIG.TILE_SIZE, mapData);
     const newTex = PIXI.Texture.from(canvas);
+    newTex.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
     setTexture(newTex);
     
     return () => {

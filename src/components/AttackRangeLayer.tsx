@@ -14,11 +14,12 @@ export default function AttackRangeLayer() {
   const selectedUnitId     = useGameStore(s => s.selectedUnitId);
   const units              = useGameStore(s => s.units);
   const attackTargetMode   = useGameStore(s => s.attackTargetMode);
+  const skillTargetMode    = useGameStore(s => s.skillTargetMode);
 
   // 공격 범위 타일 렌더링
   const draw = useCallback((g: PIXIGraphics) => {
     g.clear();
-    if (!confirmedDest || !selectedUnitId) return;
+    if (!confirmedDest || !selectedUnitId || skillTargetMode) return;
 
     const attacker = units[selectedUnitId];
     if (!attacker) return;
@@ -60,12 +61,12 @@ export default function AttackRangeLayer() {
         g.endFill();
       }
     }
-  }, [confirmedDest, selectedUnitId, units, attackTargetMode]);
+  }, [confirmedDest, selectedUnitId, units, attackTargetMode, skillTargetMode]);
 
 
   // AttackRangeLayer는 시각적 범위 표시 전용.
   // 클릭 처리는 UnitsLayer에서 스프라이트 hitbox 기반으로만 수행.
-  if (!confirmedDest || !selectedUnitId) return null;
+  if (!confirmedDest || !selectedUnitId || skillTargetMode) return null;
 
   return (
     <Graphics

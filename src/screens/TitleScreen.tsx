@@ -27,7 +27,7 @@ export default function TitleScreen() {
           <button 
             onClick={() => {
               useAppStore.setState({ 
-                pendingBattle: { attackerProvinceId: 'prov_0', defenderProvinceId: 'prov_1' } 
+                pendingBattle: { attackerProvinceId: 'prov_0', defenderProvinceId: 'prov_1', isCheat: true } 
               });
               useAppStore.getState().goTo('BATTLE');
             }}

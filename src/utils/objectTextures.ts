@@ -22,6 +22,7 @@ export const getTreeTexture = (): PIXI.Texture => {
     ctx.fillRect(10, -5, 10, 10);
   }
   treeTexture = PIXI.Texture.from(canvas);
+  treeTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
   return treeTexture;
 };
 
@@ -40,6 +41,7 @@ export const getMountainTexture = (): PIXI.Texture => {
     ctx.fillRect(0, 0, 40, 20);
   }
   mountainTexture = PIXI.Texture.from(canvas);
+  mountainTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
   return mountainTexture;
 };
 
@@ -62,5 +64,6 @@ export const getCityTexture = (): PIXI.Texture => {
     ctx.fill();
   }
   cityTexture = PIXI.Texture.from(canvas);
+  cityTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
   return cityTexture;
 };

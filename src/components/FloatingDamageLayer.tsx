@@ -48,7 +48,7 @@ function FloatingDamageItem({ dmg, camera }: { dmg: FloatingDamage; camera: Came
         top: sy,
         transform: 'translate(-50%, -50%)',
         fontSize: dmg.isCrit ? '22px' : '16px',
-        color: dmg.isCrit ? '#ffe040' : '#ffffff',
+        color: dmg.isHeal ? '#22c55e' : dmg.isWeak ? '#fca5a5' : dmg.isResist ? '#9ca3af' : dmg.isCrit ? '#ffe040' : '#ffffff',
         textShadow: dmg.isCrit
           ? '0 0 8px #ff8800, 0 2px 4px rgba(0,0,0,0.9)'
           : '0 2px 4px rgba(0,0,0,0.9)',
@@ -56,7 +56,11 @@ function FloatingDamageItem({ dmg, camera }: { dmg: FloatingDamage; camera: Came
         zIndex: 100,
       }}
     >
-      {dmg.isCrit ? `💥${dmg.value}!` : dmg.value}
+      <div className="flex flex-col items-center justify-center">
+        <span>{dmg.isHeal ? `+${dmg.value}` : dmg.isCrit ? `💥${dmg.value}!` : dmg.value}</span>
+        {dmg.isWeak && <span className="block text-[11px] font-black text-red-300 -mt-1 drop-shadow-md">WEAK</span>}
+        {dmg.isResist && <span className="block text-[11px] font-bold text-gray-400 -mt-1 drop-shadow-md">RESIST</span>}
+      </div>
     </div>
   );
 }

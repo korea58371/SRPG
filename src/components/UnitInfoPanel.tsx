@@ -26,6 +26,24 @@ function HpBar({ hp, maxHp }: { hp: number; maxHp: number }) {
   );
 }
 
+function MpBar({ mp, maxMp }: { mp: number; maxMp: number }) {
+  const pct = Math.max(0, Math.min(1, mp / maxMp)) * 100;
+  return (
+    <div className="flex-1 bg-gray-700 rounded-full h-1 relative min-w-[60px] overflow-hidden">
+      <div className="absolute top-0 left-0 h-full bg-blue-400 transition-all duration-300" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function RageBar({ rage, maxRage = 100 }: { rage: number; maxRage?: number }) {
+  const pct = Math.max(0, Math.min(1, rage / maxRage)) * 100;
+  return (
+    <div className="flex-1 bg-gray-700 rounded-full h-1 relative min-w-[60px] overflow-hidden">
+      <div className="absolute top-0 left-0 h-full bg-orange-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
 export default function UnitInfoPanel() {
   const [expanded, setExpanded] = useState(false);
 
@@ -62,9 +80,19 @@ export default function UnitInfoPanel() {
               <span className="text-white text-xs font-bold truncate">{name}</span>
               <span className={`text-[10px] ${accentCls} shrink-0`}>{faction.name}</span>
             </div>
-            <div className="flex items-center gap-2">
-              <HpBar hp={unit.hp} maxHp={unit.maxHp} />
-              <span className="text-[10px] text-gray-300 shrink-0">{unit.hp}/{unit.maxHp}</span>
+            <div className="flex flex-col gap-1 mt-1">
+              <div className="flex items-center gap-2">
+                <HpBar hp={unit.hp} maxHp={unit.maxHp} />
+                <span className="text-[10px] text-gray-300 shrink-0 w-12 text-right">{unit.hp}/{unit.maxHp}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <MpBar mp={unit.mp} maxMp={unit.maxMp} />
+                <span className="text-[10px] text-blue-300 shrink-0 w-12 text-right">{unit.mp}/{unit.maxMp}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <RageBar rage={unit.rage} />
+                <span className="text-[10px] text-orange-400 shrink-0 w-12 text-right">{Math.round(unit.rage)}/100</span>
+              </div>
             </div>
           </div>
 

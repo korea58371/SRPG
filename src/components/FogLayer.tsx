@@ -7,7 +7,9 @@ import { generateFogTexture } from '../utils/mapGenerator';
 export default function FogLayer() {
   const texture = useMemo(() => {
     const canvas = generateFogTexture(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, MAP_CONFIG.TILE_SIZE);
-    return PIXI.Texture.from(canvas);
+    const tex = PIXI.Texture.from(canvas);
+    tex.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
+    return tex;
   }, []);
 
   return (

@@ -16,7 +16,7 @@ export type AppScreen =
 export type EndingType = 'good' | 'bad';
 
 // ─── 전투 결과 ───────────────────────────────────────────────────────────────
-export type BattleOutcome = 'player_win' | 'player_lose';
+export type BattleOutcome = 'player_win' | 'player_lose' | { isVictory: boolean; turn?: number; survivorCount?: number; };
 
 // ─── 전략 레이어 장수 (Global Hero) ─────────────────────────────────────────
 export interface GlobalHero {
@@ -82,6 +82,7 @@ export interface StrategyState {
   pendingBattle: {
     attackerProvinceId: string;
     defenderProvinceId: string;
+    isCheat?: boolean;
   } | null;
   coastlineEdges: { pts: number[], innerPts?: number[] }[] | null;
   coastlinePolygons: number[][] | null;
