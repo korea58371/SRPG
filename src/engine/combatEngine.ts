@@ -2,6 +2,7 @@ import { useGameStore } from '../store/gameStore';
 import type { Unit, TilePos } from '../types/gameTypes';
 import { UNIT_MATCHUPS, UNIT_RESISTANCES, BASE_STATS } from '../constants/gameConfig';
 import { getGeneralBuff, tileToPixel } from '../store/gameStore'; // 나중에 util로 뺄 수 있음
+import { getEffectiveStat } from './statEngine';
 
 // ─── 전투 데미지 계산 (장수 버프 포함) ────────────────────────────────────────
 export function calcBaseDamage(attacker: Unit, defender: Unit, allUnits: Record<string, Unit>): { base: number; multiplier: number; isWeak: boolean; isResist: boolean } {
@@ -23,8 +24,8 @@ export function calcBaseDamage(attacker: Unit, defender: Unit, allUnits: Record<
 
   const atkBuff = getGeneralBuff(attacker, allUnits);
   const defBuff = getGeneralBuff(defender, allUnits);
-  const effectiveAtk = attacker.attack + atkBuff.attackBonus;
-  const effectiveDef = defender.defense + defBuff.defenseBonus;
+  const effectiveAtk = getEffectiveStat(attacker, 'attack') + atkBuff.attackBonus;
+  const effectiveDef = getEffectiveStat(defender, 'defense') + defBuff.defenseBonus;
 
   // 기반 공식: ((공격력 * 속성상성배율) - (방어력 * 0.5))
   const raw = (effectiveAtk * multiplier) - (effectiveDef * 0.5);

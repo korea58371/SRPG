@@ -148,6 +148,52 @@ function TurnHUD() {
   );
 }
 
+// ─── 턴 전환 애니메이션 오버레이 ─────────────────────────────────────────────────
+function TurnTransitionLayer() {
+  const turnNumber = useGameStore(s => s.turnNumber);
+  const battleResult = useGameStore(s => s.battleResult);
+  const victoryCondition = useGameStore(s => s.victoryCondition);
+  const defeatCondition = useGameStore(s => s.defeatCondition);
+  const [transitionTurn, setTransitionTurn] = useState<number | null>(null);
+
+  useEffect(() => {
+    // 0턴(초기 구동)이나 게임 종료 시점에는 연출을 스킵
+    if (turnNumber > 0 && !battleResult) {
+      setTransitionTurn(turnNumber);
+      const t = setTimeout(() => setTransitionTurn(null), 2500); // 미션 읽을 시간을 위해 2.5초 유지
+      return () => clearTimeout(t);
+    }
+  }, [turnNumber, battleResult]);
+
+  if (transitionTurn === null) return null;
+
+  return (
+    <div className="absolute inset-0 z-[100] flex items-center justify-center pointer-events-none turn-transition-bg bg-black/40 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-8">
+        <div className="turn-transition-enter flex items-baseline gap-6 drop-shadow-[0_0_30px_rgba(255,255,255,0.5)]">
+          <span className="text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 to-amber-600 text-[6rem] font-black italic tracking-widest drop-shadow-[0_0_20px_rgba(251,191,36,0.6)]">
+            TURN
+          </span>
+          <span className="text-white text-[8rem] font-black italic drop-shadow-[0_0_25px_rgba(255,255,255,1)]">
+            {transitionTurn}
+          </span>
+        </div>
+        
+        {/* 1턴 시작 시점에 한하여 승패 목표(Objective) 강제 노출 */}
+        {transitionTurn === 1 && victoryCondition && (
+          <div className="turn-objective-enter bg-black/80 border border-yellow-500/50 rounded-2xl px-10 py-5 shadow-[0_10px_40px_rgba(0,0,0,0.8)] backdrop-blur-md flex flex-col items-center gap-3">
+            <span className="text-yellow-400 font-bold text-sm tracking-widest">MISSION OBJECTIVE</span>
+            <span className="text-white text-3xl font-black">{victoryCondition.description}</span>
+            {defeatCondition && (
+              <span className="text-red-400/90 text-sm mt-1 font-semibold">패배 조건: {defeatCondition.description}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // 안전 범위(Black Screen Void 방지용)
 const clampCamera = (cam: { x: number; y: number; scale: number }) => ({
   x: Math.max(-4000, Math.min(4000, cam.x)),
@@ -519,6 +565,7 @@ function BattleScreen() {
       <HoverInfoPanel />
       <FloatingDamageLayer camera={camera} />
       <CombatLog />
+      <TurnTransitionLayer />
     </div>
   );
 }

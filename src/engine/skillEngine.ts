@@ -3,6 +3,8 @@ import type { Unit, TilePos } from '../types/gameTypes';
 import { MAP_CONFIG, isPlayableTile, UNIT_RESISTANCES } from '../constants/gameConfig';
 import { getAoETiles, MOCK_SKILLS } from '../utils/skillTargeting';
 import { tileToPixel } from '../store/gameStore';
+import { getEffectiveStat } from './statEngine';
+import type { ActiveBuff } from '../types/gameTypes';
 
 // ─── 스킬 처리 핵심 로직 ───────────────────────────────────────────────────────
 export function _resolveSkill(
@@ -64,7 +66,9 @@ export function _resolveSkill(
         const isWeak = elementalMult > 1.0;
         const isResist = elementalMult < 1.0;
 
-        const rawDmg = Math.max(1, (caster.attack * (effect.value || 1) * elementalMult) - (target.defense * 0.5));
+        const atk = getEffectiveStat(caster, 'attack');
+        const def = getEffectiveStat(target, 'defense');
+        const rawDmg = Math.max(1, (atk * (effect.value || 1) * elementalMult) - (def * 0.5));
         const dmg = Math.round(rawDmg);
         const prevState = newUnits[target.id] || target;
         const newHp = Math.max(0, prevState.hp - dmg);
@@ -85,7 +89,8 @@ export function _resolveSkill(
     } else if (effect.type === 'heal') {
       for (const target of affectedUnits) {
         hitCount++;
-        const rawHeal = Math.max(1, (caster.generalIntelligence ? caster.generalIntelligence * 10 : caster.attack) * (effect.value || 1.0));
+        const atkOrInt = caster.generalIntelligence ? (caster.generalIntelligence * 10) : getEffectiveStat(caster, 'attack');
+        const rawHeal = Math.max(1, atkOrInt * (effect.value || 1.0));
         const healAmt = Math.round(rawHeal);
         
         const prevState = newUnits[target.id] || target;
@@ -143,6 +148,38 @@ export function _resolveSkill(
           };
           logText += ` [${effect.type === 'push' ? '넉백' : '당겨짐'}]`;
         }
+      }
+    } else if (effect.type === 'buff' || effect.type === 'debuff') {
+      for (const target of affectedUnits) {
+        hitCount++;
+        const prevState = newUnits[target.id] || target;
+        const existingBuffs = prevState.buffs || [];
+        
+        if (!effect.buffType) continue; // 버프 누락 시 스킵
+
+        const newBuff: ActiveBuff = {
+          id: `buff-${Date.now()}-${Math.random()}`,
+          type: effect.buffType,
+          value: effect.value || 0,
+          duration: effect.duration || 1,
+          sourceId: caster.id
+        };
+        
+        // 동일 종류 버프 덮어쓰기 (효과 및 턴 수 갱신)
+        const filtered = existingBuffs.filter(b => b.type !== effect.buffType);
+        filtered.push(newBuff);
+        
+        newUnits[target.id] = { ...prevState, buffs: filtered };
+        
+        const isBuff = effect.type === 'buff';
+        floatings.push({
+          id: `fd-buff-${Date.now()}-${Math.random()}`,
+          x: tileToPixel(target.logicalX),
+          y: tileToPixel(target.logicalY) - 25,
+          value: isBuff ? `⇧ ${effect.buffType}` : `⇩ ${effect.buffType}`,
+          isCrit: false,
+          fontColor: isBuff ? '#00ffff' : '#ff00ff'
+        });
       }
     } else if (effect.type === 'dash') {
       const dist = effect.value || 1;
@@ -208,10 +245,6 @@ export function _resolveSkill(
 
   // 재행동 로직
   if (skill.grantsReAction) {
-    newUnits[attackerId] = {
-      ...newUnits[attackerId],
-      ct: newUnits[attackerId].ct + 100 // endUnitTurn에서 차감될 100을 미리 더해두어, 현재 턴 큐의 선두를 그대로 유지시킴
-    };
     logText += ` (연속 행동!)`;
   }
 
@@ -222,7 +255,20 @@ export function _resolveSkill(
   });
 
   const skipDelay = useGameStore.getState().isCtrlPressed ? 0 : 400;
-  setTimeout(() => useGameStore.getState().endUnitTurn(), skipDelay);
+  
+  setTimeout(() => {
+    if (skill.grantsReAction) {
+      // 턴을 종료시키지 않고 타겟 지정을 초기화하여 유저가 조작 가능한 상태로 되돌림
+      useGameStore.setState({
+        skillTargetMode: false,
+        selectedSkillId: null,
+        confirmedDestination: null,
+        attackTargetMode: false
+      });
+    } else {
+      useGameStore.getState().endUnitTurn();
+    }
+  }, skipDelay);
 }
 
 export function _moveThenAct_Skill(

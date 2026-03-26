@@ -585,8 +585,40 @@ canvas {
 }
 
 /* 선택된 상태 유지 시 */
-.smap-province-group.selected .smap-hover-overlay {
-  opacity: 0.25;
+/* ════════════════════════════════════════
+   Turn Transition Overlay (15단계)
+════════════════════════════════════════ */
+.turn-transition-enter {
+  animation: turnZoomIn 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+.turn-transition-bg {
+  animation: turnBgFade 2s ease-in-out forwards;
+}
+
+@keyframes turnZoomIn {
+  0% { transform: scale(0.6) translateX(-5%); opacity: 0; filter: blur(8px); }
+  15% { transform: scale(1.0) translateX(0); opacity: 1; filter: blur(0px); }
+  85% { transform: scale(1.05) translateX(0); opacity: 1; filter: blur(0px); }
+  100% { transform: scale(1.2) translateX(0); opacity: 0; filter: blur(12px); }
+}
+
+@keyframes turnBgFade {
+  0% { opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.turn-objective-enter {
+  animation: turnFadeInUp 0.8s ease-out 0.4s both;
+}
+
+@keyframes turnFadeInUp {
+  0% { opacity: 0; transform: translateY(20px); filter: blur(5px); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0px); }
+}
+
+
 
 

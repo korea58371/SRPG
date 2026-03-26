@@ -4,6 +4,7 @@ import { TerrainType } from '../types/gameTypes';
 import { TERRAIN_BONUS, MAP_CONFIG, UNIT_RESISTANCES } from '../constants/gameConfig';
 import { MOCK_SKILLS, isSkillTargetValid } from '../utils/skillTargeting';
 import { calcBaseDamage } from '../engine/combatEngine';
+import { getEffectiveStat } from '../engine/statEngine';
 
 const terrainNameMap: Record<TerrainType, string> = {
   [TerrainType.GRASS]: '평지',
@@ -126,7 +127,9 @@ export default function HoverInfoPanel() {
               : 1.0;
             const isWeak = elementalMult > 1.0;
             const isResist = elementalMult < 1.0;
-            const rawDmg = Math.max(1, (attacker.attack * (dmgEffect.value || 1) * elementalMult) - (hoveredUnit.defense * 0.5));
+            const atk = getEffectiveStat(attacker, 'attack');
+            const def = getEffectiveStat(hoveredUnit, 'defense');
+            const rawDmg = Math.max(1, (atk * (dmgEffect.value || 1) * elementalMult) - (def * 0.5));
             const dmg = Math.round(rawDmg);
             expectedAmount = dmg;
             damagePreview = (
@@ -141,7 +144,8 @@ export default function HoverInfoPanel() {
             );
           } else if (skill.effects.some(e => e.type === 'heal')) {
             const healEffect = skill.effects.find(e => e.type === 'heal')!;
-            const rawHeal = Math.max(1, (attacker.generalIntelligence ? attacker.generalIntelligence * 10 : attacker.attack) * (healEffect.value || 1));
+            const atkOrInt = attacker.generalIntelligence ? (attacker.generalIntelligence * 10) : getEffectiveStat(attacker, 'attack');
+            const rawHeal = Math.max(1, atkOrInt * (healEffect.value || 1));
             const healAmt = Math.round(rawHeal);
             
             damagePreview = (
@@ -180,12 +184,22 @@ export default function HoverInfoPanel() {
         <div className="mt-1 text-xs border-t border-gray-600 pt-2">
           <div className="flex justify-between items-center mb-0.5">
             <span className="font-bold text-blue-300">대상: {hoveredUnit.unitType}</span>
-            <span className="text-gray-400">🛡 방어: {hoveredUnit.defense}</span>
+            <span className="text-gray-400">🛡 방어: {getEffectiveStat(hoveredUnit, 'defense')}</span>
           </div>
           <p className="text-[10px] text-gray-400 mb-0.5">
             <span className="text-blue-300">MP: {hoveredUnit.mp}/{hoveredUnit.maxMp}</span> | <span className="text-orange-400">분노: {Math.round(hoveredUnit.rage)}/100</span>
           </p>
           <DamagePreviewHpBar hp={hoveredUnit.hp} maxHp={hoveredUnit.maxHp} expectedDamage={expectedAmount} />
+          
+          {hoveredUnit.buffs && hoveredUnit.buffs.length > 0 && (
+            <div className="mt-1 pt-1 border-t border-gray-700 flex flex-wrap gap-1">
+              {hoveredUnit.buffs.map(b => (
+                <span key={b.id} className={`text-[9px] px-1 rounded border text-white ${b.type.includes('down') || b.type === 'poison' ? 'bg-red-900/80 border-red-700' : 'bg-cyan-900/80 border-cyan-700'}`}>
+                  {b.type}({b.duration}T)
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import type { StoreSlice, GameStateSlice } from './storeTypes';
 import { TerrainType } from '../../types/gameTypes';
-import type { Unit, UnitType } from '../../types/gameTypes';
+import type { Unit, UnitType, LevelObjective } from '../../types/gameTypes';
 import { UNIT_CONFIG, BASE_STATS, PLAYER_FACTION } from '../../constants/gameConfig';
 import { tileToPixel } from '../gameStore'; // Helper functions from Root store wrapper
 
@@ -12,6 +12,8 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
   cities: [],
   battleType: 'defensive',
   biome: null,
+  victoryCondition: null,
+  defeatCondition: null,
 
   setMapData: (mapData, elevMap, mapObjects) => set({ mapData, elevMap, mapObjects }),
   setCities: (cities) => set({ cities }),
@@ -47,27 +49,31 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
 
         newUnits[`unit-p-${i}`] = {
           id: `unit-p-${i}`, factionId: attacker, unitType: typeP,
-          hp: baseP.hp * (isHeroP ? 2 : 1), maxHp: baseP.hp * (isHeroP ? 2 : 1), attack: baseP.attack * (isHeroP ? 1.5 : 1), defense: baseP.defense, speed: baseP.speed, moveSteps: baseP.moveSteps, attackRange: baseP.attackRange, ct: baseP.speed,
+          hp: baseP.hp * (isHeroP ? 2 : 1), maxHp: baseP.hp * (isHeroP ? 2 : 1), attack: baseP.attack * (isHeroP ? 1.5 : 1), defense: baseP.defense, speed: baseP.speed, moveSteps: baseP.moveSteps, attackRange: baseP.attackRange, hasActed: false,
           mp: 100, maxMp: 100, rage: 0, morale: 100,
           skills: isHeroP 
-            ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack'] 
-            : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack'],
+            ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack', 'mock-heal', 'mock-aoe-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'] 
+            : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'],
           skillCooldowns: {}, skillCharges: {}, state: 'IDLE',
           logicalX: pLx, logicalY: pLy, x: tileToPixel(pLx), y: tileToPixel(pLy), targetX: tileToPixel(pLx), targetY: tileToPixel(pLy), movePath: [], isHero: isHeroP,
         };
 
         newUnits[`unit-e-${i}`] = {
           id: `unit-e-${i}`, factionId: defender, unitType: typeE,
-          hp: baseE.hp * (isHeroE ? 2 : 1), maxHp: baseE.hp * (isHeroE ? 2 : 1), attack: baseE.attack * (isHeroE ? 1.5 : 1), defense: baseE.defense, speed: baseE.speed, moveSteps: baseE.moveSteps, attackRange: baseE.attackRange, ct: baseE.speed,
+          hp: baseE.hp * (isHeroE ? 2 : 1), maxHp: baseE.hp * (isHeroE ? 2 : 1), attack: baseE.attack * (isHeroE ? 1.5 : 1), defense: baseE.defense, speed: baseE.speed, moveSteps: baseE.moveSteps, attackRange: baseE.attackRange, hasActed: false,
           mp: 100, maxMp: 100, rage: 0, morale: 100,
           skills: isHeroE 
-            ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack'] 
-            : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack'],
+            ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack', 'mock-heal', 'mock-aoe-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'] 
+            : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'],
           skillCooldowns: {}, skillCharges: {}, state: 'IDLE',
           logicalX: eLx, logicalY: eLy, x: tileToPixel(eLx), y: tileToPixel(eLy), targetX: tileToPixel(eLx), targetY: tileToPixel(eLy), movePath: [], isHero: isHeroE,
         };
       }
-      set({ units: newUnits });
+      set({ 
+        units: newUnits,
+        victoryCondition: { type: 'REACH_LOCATION', description: '화면 좌측 상단(0,0) 좌표로 탈출하라', targetTile: { lx: 0, ly: 0 } },
+        defeatCondition: { type: 'WIPEOUT_ALLY', description: '아군 부대 전송 실패(전멸)' }
+      });
       setTimeout(() => get().endUnitTurn(), 300);
       return;
     }
@@ -121,9 +127,9 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         hp: stats.hp * (isHero ? 2 : 1), maxHp: stats.hp * (isHero ? 2 : 1),
         attack: stats.attack * (isHero ? 1.5 : 1), defense: stats.defense,
         speed: stats.speed, moveSteps: stats.moveSteps, attackRange: stats.attackRange,
-        ct: stats.speed,
+        hasActed: false,
         mp: 100, maxMp: 100, rage: 0, morale: 100,
-        skills: isHero ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-aoe-heal'] : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal'], 
+        skills: isHero ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-aoe-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'] : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'], 
         skillCooldowns: {}, skillCharges: {},
         state: 'IDLE',
         logicalX: lx, logicalY: ly,
@@ -136,7 +142,18 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         isHero,
       };
     }
-    set({ units: newUnits });
+
+    let victory = { type: 'ROUT_ENEMY', description: '적군을 모두 격퇴하라' } as LevelObjective;
+    let defeat = { type: 'WIPEOUT_ALLY', description: '아군 전원 전사' } as LevelObjective;
+
+    if (battleType === 'offensive') {
+      const enemyHeroId = Object.values(newUnits).find(u => u.factionId !== PLAYER_FACTION && u.isHero)?.id;
+      if (enemyHeroId) {
+        victory = { type: 'KILL_TARGET', description: '적 지휘관(보스)을 암살하라', targetId: enemyHeroId };
+      }
+    }
+
+    set({ units: newUnits, victoryCondition: victory, defeatCondition: defeat });
     setTimeout(() => get().endUnitTurn(), 300); // 턴 초기화
   }
 });

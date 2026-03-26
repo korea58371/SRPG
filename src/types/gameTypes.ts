@@ -43,10 +43,21 @@ export interface SkillCost {
   amount: number;
 }
 
+export type BuffType = 'atk_up' | 'atk_down' | 'def_up' | 'def_down' | 'speed_up' | 'speed_down' | 'poison' | 'regen' | 'stun';
+
+export interface ActiveBuff {
+  id: string;       // 고유 인스턴스 ID 혹은 식별자
+  type: BuffType;   // 버프 종류
+  value: number;    // 증가율(e.g., 50 -> 50% 증가) 또는 데미지/회복 고정 수치
+  duration: number; // 남은 턴 수
+  sourceId?: string;// 시전자(부여한 자) ID
+}
+
 export interface SkillEffect {
   type: 'damage' | 'heal' | 'buff' | 'debuff' | 'push' | 'pull' | 'teleport' | 'dash' | 'dash_to_target';
-  value?: number; // 데미지 계수, 힐량, 이동 칸 수 등
+  value?: number; // 데미지 계수, 힐량, 이동 칸 수, 버프 밸류 등
   duration?: number; // 버프/디버프 지속 턴
+  buffType?: BuffType; // type이 buff나 debuff일 때 혹은 부가 효과일 때 부여할 버프 종류
   element?: DamageAttribute; // 기술 고유 데미지 속성
 }
 
@@ -88,9 +99,9 @@ export interface Unit {
   moveSteps: number;   // 1턴에 이동 가능한 타일 수
   attackRange: number;
 
-  // ─ CT(Charge Time) 이니셔티브 시스템 ─────────────────────────
-  // 매 틱마다 speed만큼 증가. CT_THRESHOLD(=100) 도달 시 행동권 획득
-  ct: number;
+  // ─ 정통 라운드(Round) 턴 시스템 ─────────────────────────
+  // 매 라운드가 돌아올 때 false로 리셋되고, 1회 행동을 마치면 true로 전환되어 행동 제어
+  hasActed: boolean;
 
   // ─ 스킬 시스템 전용 자원 ─────────────────────────────────────────
   mp: number;
@@ -100,6 +111,7 @@ export interface Unit {
   skills: string[];      // 보유 스킬 ID 목록
   skillCooldowns: Record<string, number>; // 스킬별 남은 쿨타임
   skillCharges: Record<string, number>;   // 스킬별 남은 사용 횟수
+  buffs?: ActiveBuff[];  // 활성화된 상태이상 및 버프 목록
 
   // 위치 및 렌더링
   state: UnitState;
@@ -122,4 +134,20 @@ export interface Unit {
   // ─ 장수 내정 전용 능력치 ──────────────────────────────────────
   raceEffects?: HeroPassiveEffect;   // 종족 기반 기본 패시브
   classEffects?: HeroPassiveEffect;  // 직업 기반 패시브
+}
+
+// ─ 승리 / 패배 조건 (Level Objective) 확장 설계 ────────────────────────
+export type ObjectiveType = 
+  | 'ROUT_ENEMY'       // 적 모두 처치
+  | 'WIPEOUT_ALLY'     // 아군 모두 사망
+  | 'KILL_TARGET'      // 특정 유닛 사망
+  | 'REACH_LOCATION'   // 특정 위치 도달
+  | 'SURVIVE_TURNS';   // N턴간 생존
+
+export interface LevelObjective {
+  type: ObjectiveType;       // 판정 타입
+  description: string;       // 유저 UI 다이얼로그 출력값
+  targetId?: string;         // 'KILL_TARGET' (암살 대상 단위 ID)
+  targetTile?: TilePos;      // 'REACH_LOCATION' (도달할 타일 X/Y 좌표)
+  turnLimit?: number;        // 'SURVIVE_TURNS' 전용 한계치
 }

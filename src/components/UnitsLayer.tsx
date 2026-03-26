@@ -17,6 +17,7 @@ import { useGameStore, tileToPixel, getAttackableTargets } from '../store/gameSt
 import { getUnitTypeTexture } from '../utils/unitTextures';
 import { getTurnOrder } from '../store/slices/turnSystemSlice';
 import { MOCK_SKILLS, getAoETiles, getManhattanDist } from '../utils/skillTargeting';
+import { getEffectiveStat } from '../engine/statEngine';
 
 const MOVE_SPEED = 6;
 // W, H 변수는 더 이상 단위 픽셀 계산에 직접 쓰지 않으므로 주석 처리
@@ -151,13 +152,15 @@ export function UnitSprite({ id }: { id: string }) {
   const isSelected = selectedUnitId === id;
   const color = FACTIONS[unit.factionId]?.color ?? 0xaaaaaa;
   const isActive  = useGameStore(s => s.activeUnitId) === id;
-  const alpha = 1.0; // 전황 및 경고 UI 시인성 확보를 위해 아군 턴 비활성 반투명화 로직 제거
+  const alpha = 1.0; // 전황 및 경고 UI 시인성 확보
   const iconTexture = getUnitTypeTexture(unit.unitType);
 
-  // 선택된 유닛은 흰색 외곽선(배경을 흰색으로)
-  const bgColor = isSelected ? 0xffffff : color;
+  const hasActed  = unit.hasActed;
 
-  const hasActed  = unit.ct < 100;
+  // 선택된 유닛은 흰색 외곽선, 이미 행동을 마친 유닛은 짙은 회색(dimmed) 배경
+  const bgColor = isSelected ? 0xffffff : (hasActed && !isActive ? 0x555555 : color);
+  const iconTint = (hasActed && !isActive) ? 0x777777 : 0xffffff;
+
   const attackMode = useGameStore(s => s.attackTargetMode);
   const activeUnit = useGameStore(s => s.activeUnitId ? s.units[s.activeUnitId] : null);
   const isTargetableEnemy = attackMode && activeUnit && unit.factionId !== activeUnit.factionId;
@@ -192,14 +195,16 @@ export function UnitSprite({ id }: { id: string }) {
               const elementalMult = (resistMap && attackElement in resistMap) 
                 ? (resistMap[attackElement as keyof typeof resistMap] || 1.0) 
                 : 1.0;
-              isWeak = elementalMult > 1.0;
               isResist = elementalMult < 1.0;
               
-              const rawDmg = Math.max(1, (activeUnit.attack * (dmgEffect.value || 1) * elementalMult) - (unit.defense * 0.5));
+              const atk = getEffectiveStat(activeUnit, 'attack');
+              const def = getEffectiveStat(unit, 'defense');
+              const rawDmg = Math.max(1, (atk * (dmgEffect.value || 1) * elementalMult) - (def * 0.5));
               expectedDamage = Math.round(rawDmg);
             } else if (skill.effects.some(e => e.type === 'heal')) {
               const healEffect = skill.effects.find(e => e.type === 'heal')!;
-              const rawHeal = Math.max(1, (activeUnit.generalIntelligence ? activeUnit.generalIntelligence * 10 : activeUnit.attack) * (healEffect.value || 1));
+              const atkOrInt = activeUnit.generalIntelligence ? (activeUnit.generalIntelligence * 10) : getEffectiveStat(activeUnit, 'attack');
+              const rawHeal = Math.max(1, atkOrInt * (healEffect.value || 1));
               expectedDamage = -Math.round(rawHeal); // 회복은 음수 데미지로 처리
             }
           }
@@ -212,7 +217,9 @@ export function UnitSprite({ id }: { id: string }) {
       const dest = confirmedDest || { lx: activeUnit.logicalX, ly: activeUnit.logicalY };
       const validTargets = getAttackableTargets(activeUnit, useGameStore.getState().units, dest.lx, dest.ly);
       if (validTargets.some(t => t.id === id)) {
-        const rawDmg = Math.max(1, activeUnit.attack - (unit.defense * 0.5));
+        const atk = getEffectiveStat(activeUnit, 'attack');
+        const def = getEffectiveStat(unit, 'defense');
+        const rawDmg = Math.max(1, atk - (def * 0.5));
         expectedDamage = Math.round(rawDmg);
       }
     }
@@ -308,6 +315,7 @@ export function UnitSprite({ id }: { id: string }) {
             anchor={0.5}
             y={-12}
             alpha={0.9}
+            tint={iconTint}
           />
         )}
         

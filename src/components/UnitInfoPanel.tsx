@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
 import { UNIT_ICONS } from '../utils/unitTextures';
+import { getEffectiveStat } from '../engine/statEngine';
 
 const UNIT_TYPE_KR: Record<string, string> = {
   INFANTRY: '보병',
@@ -111,9 +112,9 @@ export default function UnitInfoPanel() {
           <div className="border-t border-gray-700 px-3 py-2">
             <div className="grid grid-cols-4 gap-1 text-center">
               {[
-                { label: '공격', value: Math.round(unit.attack),  icon: '⚔' },
-                { label: '방어', value: Math.round(unit.defense), icon: '🛡' },
-                { label: '이동', value: unit.speed,               icon: '👟' },
+                { label: '공격', value: getEffectiveStat(unit, 'attack'),  icon: '⚔' },
+                { label: '방어', value: getEffectiveStat(unit, 'defense'), icon: '🛡' },
+                { label: '이동', value: getEffectiveStat(unit, 'speed'),   icon: '👟' },
                 { label: '사거리', value: unit.attackRange,       icon: '🎯' },
               ].map(({ label, value, icon: ico }) => (
                 <div key={label} className="bg-gray-800/60 rounded py-1">
@@ -136,6 +137,16 @@ export default function UnitInfoPanel() {
                   <span className="text-[9px] bg-purple-900/40 text-purple-300 rounded px-1 py-0.5">知{unit.generalIntelligence}</span>
                   <span className="text-[9px] bg-green-900/40 text-green-300 rounded px-1 py-0.5">政{unit.generalPolitics}</span>
                   <span className="text-[9px] bg-blue-900/40 text-blue-300 rounded px-1 py-0.5">統{unit.generalCharisma}타일</span>
+                </div>
+              )}
+              {/* 활성화된 상태 이상 뱃지 (Buffs/Debuffs) */}
+              {unit.buffs && unit.buffs.length > 0 && (
+                <div className="flex gap-1 flex-wrap mt-1">
+                  {unit.buffs.map(b => (
+                    <span key={b.id} className={`text-[9px] rounded px-1 py-0.5 text-white ${b.type.includes('down') || b.type === 'poison' || b.type === 'stun' ? 'bg-red-900/60 border border-red-700' : 'bg-cyan-900/60 border border-cyan-700'}`}>
+                      {b.type}({b.duration}T)
+                    </span>
+                  ))}
                 </div>
               )}
             </div>

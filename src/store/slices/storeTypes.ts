@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand';
-import type { Unit, TerrainType, MapObjectData, BattleType, TilePos, FactionId } from '../../types/gameTypes';
+import type { Unit, TerrainType, MapObjectData, BattleType, TilePos, FactionId, LevelObjective } from '../../types/gameTypes';
 import type { MapInfo } from '../../utils/mapGenerator';
 import type { BattleOutcome } from '../../types/appTypes';
 
@@ -9,11 +9,12 @@ export interface FloatingDamage {
   id: string;
   x: number;
   y: number;
-  value: number;
+  value: number | string;
   isCrit: boolean;
   isWeak?: boolean;
   isResist?: boolean;
   isHeal?: boolean;
+  fontColor?: string;
 }
 
 export interface GameStateSlice {
@@ -25,6 +26,10 @@ export interface GameStateSlice {
   cities: { x: number; y: number }[];
   battleType: BattleType;
   biome: MapInfo | null;
+  
+  // 승리 / 패배 조건
+  victoryCondition: LevelObjective | null;
+  defeatCondition: LevelObjective | null;
   
   // 세터
   setMapData: (mapData: TerrainType[][], elevMap: number[][], mapObjects: MapObjectData[]) => void;

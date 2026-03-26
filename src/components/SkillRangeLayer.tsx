@@ -41,15 +41,20 @@ export default function SkillRangeLayer() {
     }
     g.endFill();
 
-    // 2. 마우스 호버된 지점을 타겟으로 했을 때의 AoE(레드존) 시각화
+    // 2. 마우스 호버된 지점을 타겟으로 했을 때의 AoE(레드존/그린존) 시각화
     if (hoveredMapTile) {
       const dist = getManhattanDist(casterPos.lx, casterPos.ly, hoveredMapTile.lx, hoveredMapTile.ly);
       // 사거리 이내일 경우 적용
       if (dist <= skill.range) {
         const aoeTiles = getAoETiles(casterPos, hoveredMapTile, skill.aoeShape, skill.aoeRadius, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
         
-        g.beginFill(0xff2222, 0.6);
-        g.lineStyle(2, 0xff0000, 0.9);
+        // 회복/버프형 스킬 여부에 따라 네온 그린(0x00ff00) 또는 레드(0xff2222) 사용
+        const isHelpful = skill.effects.some(e => e.type === 'heal' || e.type === 'buff');
+        const fillColor = isHelpful ? 0x00ff00 : 0xff2222;
+        const lineColor = isHelpful ? 0x00ffcc : 0xff0000;
+        
+        g.beginFill(fillColor, 0.6);
+        g.lineStyle(2, lineColor, 0.9);
         for (const tile of aoeTiles) {
           g.drawRect(tile.lx * TILE, tile.ly * TILE, TILE, TILE);
         }

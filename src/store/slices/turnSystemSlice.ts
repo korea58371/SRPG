@@ -1,8 +1,8 @@
 import type { StoreSlice, TurnSystemSlice } from './storeTypes';
 
 import type { Unit } from '../../types/gameTypes';
-import { CT_THRESHOLD, PLAYER_FACTION, MAP_CONFIG } from '../../constants/gameConfig';
-import { buildTileSets } from '../gameStore';
+import { PLAYER_FACTION, MAP_CONFIG } from '../../constants/gameConfig';
+import { buildTileSets, tileToPixel } from '../gameStore';
 import { calcMoveRange } from '../../utils/moveRange';
 import { _runSingleEnemyAI } from '../../engine/aiEngine';
 
@@ -10,9 +10,8 @@ export function getTurnOrder(units: Record<string, Unit>): string[] {
   const alive = Object.values(units).filter(u => u.state !== 'DEAD');
   if (alive.length === 0) return [];
 
-  // 현재 라운드 미행동 유닛
-  const currentRound = alive.filter(u => u.ct > 0).sort((a, b) => {
-    if (b.ct !== a.ct) return b.ct - a.ct;
+  // 현재 라운드 미행동 유닛 (hasActed === false 인 것들 중, 속도로 정렬)
+  const currentRound = alive.filter(u => !u.hasActed).sort((a, b) => {
     if (b.speed !== a.speed) return b.speed - a.speed;
     if (a.factionId === PLAYER_FACTION && b.factionId !== PLAYER_FACTION) return -1;
     if (b.factionId === PLAYER_FACTION && a.factionId !== PLAYER_FACTION) return 1;
@@ -27,7 +26,7 @@ export function getTurnOrder(units: Record<string, Unit>): string[] {
     return a.id.localeCompare(b.id);
   });
 
-  const nextRound = alive.filter(u => u.ct <= 0).sort((a, b) => {
+  const nextRound = alive.filter(u => u.hasActed).sort((a, b) => {
     if (b.speed !== a.speed) return b.speed - a.speed;
     if (a.factionId === PLAYER_FACTION && b.factionId !== PLAYER_FACTION) return -1;
     if (b.factionId === PLAYER_FACTION && a.factionId !== PLAYER_FACTION) return 1;
@@ -36,7 +35,7 @@ export function getTurnOrder(units: Record<string, Unit>): string[] {
 
   let order = [...currentRound, ...nextRound].map(u => u.id);
   
-  // 만약 큐가 짧을 경우 그 다음 라운드의 순서를 채워넣어 10개 이상 보장
+  // UI용으로 순서를 채워넣음
   while (order.length <= 15) {
     order.push(...baseOrder.map(u => u.id));
   }
@@ -44,21 +43,25 @@ export function getTurnOrder(units: Record<string, Unit>): string[] {
   return order;
 }
 
-function _calcNextActive(units: Record<string, Unit>): { updatedUnits: Record<string, Unit>; activeId: string } {
+function _calcNextActive(units: Record<string, Unit>): { updatedUnits: Record<string, Unit>; activeId: string; roundEnded: boolean } {
   const alive = Object.values(units).filter(u => u.state !== 'DEAD');
-  if (alive.length === 0) return { updatedUnits: units, activeId: '' };
+  if (alive.length === 0) return { updatedUnits: units, activeId: '', roundEnded: false };
 
   let finalUnits = { ...units };
-  const allActed = alive.every(u => u.ct <= 0);
+  let roundEnded = false;
+  
+  // 모든 생존 유닛이 이미 행동을 끝냈는가?
+  const allActed = alive.every(u => u.hasActed);
 
   if (allActed) {
     for (const u of alive) {
-      finalUnits[u.id] = { ...finalUnits[u.id], ct: u.speed };
+      finalUnits[u.id] = { ...finalUnits[u.id], hasActed: false };
     }
+    roundEnded = true;
   }
 
   const order = getTurnOrder(finalUnits);
-  return { updatedUnits: finalUnits, activeId: order[0] ?? '' };
+  return { updatedUnits: finalUnits, activeId: order[0] ?? '', roundEnded };
 }
 
 export const createTurnSystemSlice: StoreSlice<TurnSystemSlice> = (set, get) => ({
@@ -78,35 +81,73 @@ export const createTurnSystemSlice: StoreSlice<TurnSystemSlice> = (set, get) => 
     
     const u = s.units[s.activeUnitId];
     if (u && u.state !== 'DEAD') {
-      const usedCt = CT_THRESHOLD;
       set(s2 => ({
-        units: { ...s2.units, [s2.activeUnitId!]: { ...u, ct: u.ct - usedCt } }
+        units: { ...s2.units, [s2.activeUnitId!]: { ...u, hasActed: true } }
       }));
     }
 
-    const isMatchOver = 
-      Object.values(get().units).every(unit => unit.state === 'DEAD' || unit.factionId === PLAYER_FACTION) ||
-      Object.values(get().units).every(unit => unit.state === 'DEAD' || unit.factionId !== PLAYER_FACTION);
-    
-    if (isMatchOver) {
-      const playerWon = Object.values(get().units).some(u => u.factionId === PLAYER_FACTION && u.state !== 'DEAD');
-      setTimeout(() => set({ battleResult: { isVictory: playerWon, turn: get().turnNumber, survivorCount: 0 } }), 1000);
-      return;
-    }
+    if (checkMatchRules(get, set)) return;
 
     _advanceTurn(set, get);
   }
 });
 
 function _advanceTurn(set: any, get: any) {
-  set((s: any) => ({ turnNumber: s.turnNumber + 1 }));
   const s = get();
-  const { updatedUnits, activeId } = _calcNextActive(s.units);
+  const { updatedUnits, activeId, roundEnded } = _calcNextActive(s.units);
+
+  if (roundEnded || s.turnNumber === 0) {
+    set((s2: any) => ({ turnNumber: Math.max(1, s2.turnNumber + (roundEnded ? 1 : 0)) }));
+  }
 
   const activeUnit = updatedUnits[activeId];
   if (!activeUnit) return;
   
-  updatedUnits[activeId] = { ...activeUnit };
+  // ─── 턴 시작 시 버프/디버프 틱(Tick) 및 지속 효과 처리 ───
+  const buffs = activeUnit.buffs || [];
+  const nextBuffs: typeof buffs = [];
+  let hpDiff = 0;
+  
+  for (const b of buffs) {
+    if (b.type === 'poison') hpDiff -= b.value;
+    if (b.type === 'regen') hpDiff += b.value;
+    
+    // 남은 턴수 차감 (1보다 크면 유지, 1 이하면 소멸되므로 nextBuffs에 안 넣음)
+    if (b.duration > 1) {
+      nextBuffs.push({ ...b, duration: b.duration - 1 });
+    }
+  }
+  
+  const currentHp = activeUnit.hp;
+  let newHp = currentHp;
+  if (hpDiff !== 0) {
+    newHp = Math.max(0, Math.min(activeUnit.maxHp, currentHp + Math.round(hpDiff)));
+    
+    const floatings = get().floatingDamages || [];
+    set({
+      floatingDamages: [
+        ...floatings,
+        {
+          id: `fd-dot-${Date.now()}-${Math.random()}`,
+          x: tileToPixel(activeUnit.logicalX),
+          y: tileToPixel(activeUnit.logicalY) - 15,
+          value: hpDiff > 0 ? hpDiff : -hpDiff,
+          isCrit: false,
+          fontColor: hpDiff > 0 ? '#00ff00' : '#800080',
+          isHeal: hpDiff > 0
+        }
+      ]
+    });
+  }
+  
+  updatedUnits[activeId] = { ...activeUnit, hp: newHp, buffs: nextBuffs, state: newHp <= 0 ? 'DEAD' : activeUnit.state };
+  
+  // 도트 데미지로 사망 시 턴 즉시 강제 종료
+  if (newHp <= 0) {
+    set({ units: updatedUnits, activeUnitId: null });
+    get().endUnitTurn();
+    return;
+  }
 
   set({ units: updatedUnits, activeUnitId: activeId });
 
@@ -122,5 +163,51 @@ function _advanceTurn(set: any, get: any) {
     // Enemy AI deferral
     const aiDelay = get().isCtrlPressed ? 0 : 400;
     setTimeout(() => _runSingleEnemyAI(activeId), aiDelay);
+  }
+}
+
+// ─── 승리 / 패배 조건 동적 판정 로직 (16단계) ──────────────────────────
+function checkMatchRules(get: any, set: any): boolean {
+  const s = get();
+  if (s.battleResult) return true; // 결과 중복 방어
+
+  const victory = s.victoryCondition;
+  const defeat = s.defeatCondition;
+
+  const isWin = victory ? evaluateCondition(victory, s) : false;
+  const isLoss = defeat ? evaluateCondition(defeat, s) : false;
+
+  if (isWin || isLoss) {
+    const playerWon = isWin;
+    const survivorCount = Object.values(s.units).filter((u: any) => u.factionId === PLAYER_FACTION && u.state !== 'DEAD').length;
+    setTimeout(() => {
+      set({ battleResult: { isVictory: playerWon, turn: get().turnNumber, survivorCount } });
+    }, 1000);
+    return true;
+  }
+  return false;
+}
+
+function evaluateCondition(cond: any, s: any): boolean {
+  if (!cond) return false;
+  const alivePlayers = Object.values(s.units).filter((u: any) => u.factionId === PLAYER_FACTION && u.state !== 'DEAD');
+  const aliveEnemies = Object.values(s.units).filter((u: any) => u.factionId !== PLAYER_FACTION && u.state !== 'DEAD');
+  
+  switch (cond.type) {
+    case 'ROUT_ENEMY':
+      return aliveEnemies.length === 0;
+    case 'WIPEOUT_ALLY':
+      return alivePlayers.length === 0;
+    case 'KILL_TARGET':
+      if (!cond.targetId) return false;
+      const target = s.units[cond.targetId];
+      return !target || target.state === 'DEAD';
+    case 'REACH_LOCATION':
+      if (!cond.targetTile) return false;
+      return alivePlayers.some((u: any) => u.logicalX === cond.targetTile.lx && u.logicalY === cond.targetTile.ly);
+    case 'SURVIVE_TURNS':
+      return s.turnNumber >= (cond.turnLimit || 999);
+    default:
+      return false;
   }
 }
