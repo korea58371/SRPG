@@ -68,6 +68,12 @@ export interface InteractionSlice {
   skillTargetMode: boolean;
   selectedSkillId: string | null;
   hoveredUnitId: string | null;
+  fieldMenuPos: { x: number; y: number } | null;
+  unitListModalOpen: boolean;
+
+  openFieldMenu: (pos: { x: number; y: number }) => void;
+  closeFieldMenu: () => void;
+  setUnitListModalOpen: (isOpen: boolean) => void;
 
   clearBattleResult: () => void;
   setHoveredUnitId: (id: string | null) => void;

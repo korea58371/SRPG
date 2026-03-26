@@ -23,6 +23,12 @@ export const createInteractionSlice: StoreSlice<InteractionSlice> = (set, get) =
   skillTargetMode: false,
   selectedSkillId: null,
   hoveredUnitId: null,
+  fieldMenuPos: null,
+  unitListModalOpen: false,
+
+  openFieldMenu: (pos) => set({ fieldMenuPos: pos }),
+  closeFieldMenu: () => set({ fieldMenuPos: null }),
+  setUnitListModalOpen: (isOpen) => set({ unitListModalOpen: isOpen }),
 
   clearBattleResult: () => set({ battleResult: null }),
   setHoveredUnitId: (id) => set({ hoveredUnitId: id }),

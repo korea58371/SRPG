@@ -20,6 +20,8 @@ import FloatingDamageLayer from './components/FloatingDamageLayer';
 import UnitInfoPanel    from './components/UnitInfoPanel';
 import HoverInfoPanel   from './components/HoverInfoPanel';
 import TurnEndPrompt    from './components/TurnEndPrompt';
+import FieldMenu        from './components/FieldMenu';
+import UnitListModal    from './components/UnitListModal';
 import { useGameStore } from './store/gameStore';
 import { useAppStore }  from './store/appStore';
 import { useInteractionManager } from './hooks/useInteractionManager';
@@ -455,9 +457,21 @@ function BattleScreen() {
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    if (useGameStore.getState().skillTargetMode) useGameStore.getState().cancelSkillTargetMode();
-    else if (confirmedDest) cancelConfirmedMove();
-    else if (selectedUnitId) selectUnit(null);
+    const store = useGameStore.getState();
+    let handled = false;
+    
+    // 1. 진행 중 타겟팅 또는 조작 해제
+    if (store.attackTargetMode || store.skillTargetMode || store.confirmedDestination || store.selectedUnitId) {
+      if (store.skillTargetMode) store.cancelSkillTargetMode();
+      else if (store.confirmedDestination) store.cancelConfirmedMove();
+      else if (store.selectedUnitId) store.selectUnit(null);
+      handled = true;
+    }
+
+    // 2. 아무것도 안 하고 빈 맵을 우클릭한 경우 -> 전장 메뉴
+    if (!handled && !store.battleResult && store.turnNumber > 0) {
+      store.openFieldMenu({ x: e.clientX, y: e.clientY });
+    }
   }, [confirmedDest, cancelConfirmedMove, selectedUnitId, selectUnit]);
 
   return (
@@ -489,6 +503,8 @@ function BattleScreen() {
               eventMode="static"
               onpointerdown={(e) => {
                 if (e.button === 2) return;
+                const store = useGameStore.getState();
+                if (store.fieldMenuPos || store.unitListModalOpen) return;
                 
                 const pos = e.data.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
                 const lx = Math.floor(pos.x / MAP_CONFIG.TILE_SIZE);
@@ -498,11 +514,13 @@ function BattleScreen() {
               }}
 
               onpointermove={(e) => {
+                const store = useGameStore.getState();
+                if (store.fieldMenuPos || store.unitListModalOpen) return;
+
                 // 상단 레이어들의 간섭을 피해 가장 넓은 컨테이너에서 마우스 위치를 감지합니다.
                 const pos = e.data.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
                 const lx = Math.floor(pos.x / MAP_CONFIG.TILE_SIZE);
                 const ly = Math.floor(pos.y / MAP_CONFIG.TILE_SIZE);
-                const store = useGameStore.getState();
                 store.setHoveredMapTile({ lx, ly });
                 store.setHoveredMapPixel({ x: pos.x, y: pos.y });
                 store.setHoveredMoveTile({ lx, ly });
@@ -566,6 +584,8 @@ function BattleScreen() {
       <FloatingDamageLayer camera={camera} />
       <CombatLog />
       <TurnTransitionLayer />
+      <FieldMenu />
+      <UnitListModal />
     </div>
   );
 }

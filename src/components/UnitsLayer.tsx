@@ -301,9 +301,17 @@ export function UnitSprite({ id }: { id: string }) {
           anchor={{ x: 0.5, y: 1.0 }}
           eventMode="static"
           cursor={cursorType}
-          onpointerenter={() => setHoveredUnit(id)}
+          onpointerenter={() => {
+            const store = useGameStore.getState();
+            if (store.fieldMenuPos || store.unitListModalOpen) return;
+            setHoveredUnit(id);
+          }}
           onpointerleave={() => setHoveredUnit(null)}
-          onpointerdown={handlePointerDown}
+          onpointerdown={(e) => {
+            const store = useGameStore.getState();
+            if (store.fieldMenuPos || store.unitListModalOpen) return;
+            handlePointerDown(e);
+          }}
         />
         
         {/* 병종 아이콘 */}
