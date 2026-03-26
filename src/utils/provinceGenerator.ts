@@ -17,51 +17,75 @@ import { FACTIONS } from '../constants/gameConfig';
 
 // ─── 지형 타입 ────────────────────────────────────────────────────────────────
 export type TerrainType =
-  | 'peak'        // 산봉우리 (h ≥ 0.75)
-  | 'mountain'    // 산악     (h 0.55~0.75)
-  | 'highland'    // 고원     (h 0.38~0.55)
-  | 'forest'      // 숲       (h 0.20~0.38 + 습도 높음)
-  | 'plains'      // 평야     (h 0.20~0.38 + 습도 낮음)
-  | 'wasteland'   // 황무지   (h 0.20~0.38 + 습도 매우 낮음)
+  | 'peak'        // 화산/최고봉 (h ≥ 0.82)
+  | 'mountain'    // 산악     (h 0.65~0.82)
+  | 'hill'        // 구릉/고원 (h 0.50~0.65)
+  | 'forest'      // 활엽수림  (온대 + 습윤)
+  | 'taiga'       // 침엽수림  (냉대/한대 + 습윤)
+  | 'plains'      // 평야     (온대 + 보통)
+  | 'savanna'     // 사바나   (열대 + 보통)
+  | 'desert'      // 사막/황야 (열/온대 + 건조)
+  | 'tundra'      // 툰드라   (한대 + 건조)
+  | 'ice'         // 빙하/만년설 (극지방)
   | 'coastal'     // 해안     (h 0.08~0.20)
   | 'ocean';      // 바다     (h < 0.08)
 
 // 지형별 이름 풀
 const TERRAIN_NAMES: Record<Exclude<TerrainType, 'ocean'>, string[][]> = {
   peak: [
-    ['철봉 요새', '빙설 봉우리', '구름 위 요새', '설봉 요새', '천공 요새'],
-    ['동방 철봉', '화염 봉우리', '암흑 요새', '폭풍 봉우리', '석회암 요새'],
-    ['중앙 봉우리', '안개 봉우리', '경계 철봉', '고산 요새', '구름 철봉'],
+    ['철봉 요새', '비룡의 둥지', '구름 위 성채', '천공 요새', '숨겨진 뾰족산'],
+    ['화염 봉우리', '검은 용암산', '암흑 요새', '폭풍 봉우리', '재앙의 화산'],
+    ['중앙 봉우리', '안개 봉우리', '고산 요새', '구름 철봉', '고요한 вър'],
   ],
   mountain: [
-    ['금강 산맥', '서방 고원', '석회암 고원', '서쪽 요새', '철옹 고원'],
-    ['붉은 산맥', '화염 고원', '동방 요새', '암흑 고원', '용암 지대'],
-    ['경계 산맥', '중앙 고원', '안개 산맥', '분계 요새', '단층 고원'],
+    ['금강 산맥', '은빛 장벽', '바람맞이 산맥', '서쪽 요새', '철옹 산맥'],
+    ['붉은 산맥', '피의 산맥', '동방 요새', '암흑 산맥', '용암 지대'],
+    ['경계 산맥', '단층 산맥', '안개 산맥', '분계 요새', '그림자 산맥'],
   ],
-  highland: [
-    ['고원 성채', '서방 구릉', '낙조 고원', '은빛 대지', '고지 성채'],
-    ['동방 고지', '황토 구릉', '화산 고원', '동쪽 대지', '용암 고원'],
-    ['경계 고원', '안개 고원', '중앙 구릉', '떠도는 땅', '회색 고원'],
+  hill: [
+    ['서방 구릉', '낙조 고원', '은빛 대지', '바람 구릉', '고요한 고원'],
+    ['황토 구릉', '붉은 고지', '동쪽 대지', '메마른 언덕', '울퉁불퉁한 대지'],
+    ['경계 고원', '안개 고원', '중앙 구릉', '떠도는 땅', '회색 고지'],
   ],
   forest: [
-    ['서쪽 숲', '은백 삼림', '낙엽 숲', '서방 수목', '청송 숲'],
-    ['동쪽 수풀', '심림 지대', '어둠 숲', '동방 삼림', '독수 숲'],
+    ['서쪽 숲', '은백 삼림', '낙엽 숲', '요정의 숲', '청송 숲'],
+    ['어둠 숲', '독거미 수풀', '맹수 삼림', '동방 삼림', '핏빛 숲'],
     ['중앙 숲', '안개 숲', '경계 삼림', '은둔 숲', '이끼 숲'],
   ],
+  taiga: [
+    ['북방 침엽수림', '검은 숲', '서리송림', '얼어붙은 수해', '만년송 숲'],
+    ['냉혹한 숲', '회색 침엽수림', '백설 삼림', '겨울수풀', '사령의 숲'],
+    ['경계의 눈숲', '고요한 침엽수림', '안개 낀 설림', '푸른바늘 숲', '눈꽃 숲'],
+  ],
   plains: [
-    ['낙조 평야', '은빛 평원', '광활 평야', '서방 들판', '황금 들판'],
-    ['동쪽 평원', '붉은 평야', '동방 들판', '광막 평야', '불모 들판'],
+    ['가을 보리밭', '풍요의 대지', '광활 평야', '서방 들판', '황금초원'],
+    ['동쪽 평원', '붉은 평야', '거친 들판', '전쟁의 평원', '핏빛 대지'],
     ['중앙 평원', '안개 평원', '경계 들판', '바람 평야', '회색 들판'],
   ],
-  wasteland: [
-    ['서방 황무지', '모래 불모지', '황량 벌판', '서쪽 폐허', '회색 불모지'],
-    ['황무지', '동방 불모지', '화염 황야', '잿빛 황야', '폐허 들판'],
-    ['중앙 황무지', '안개 황야', '경계 황무지', '저주 땅', '죽음 들판'],
+  savanna: [
+    ['마른 풀밭', '가젤의 들판', '사자 평원', '뜨거운 초원', '노란 대지'],
+    ['용골 사바나', '메마른 사냥터', '붉은 열대 초원', '태양의 들판', '갈라진 흙먼지'],
+    ['얼룩 평원', '모래 섞인 초원', '야생의 평원', '먼지바람 대지', '고요한 사바나'],
+  ],
+  desert: [
+    ['황금 모래언덕', '하얀 소금사막', '망각의 사막', '바람의 황무지', '오아시스 상단'],
+    ['죽음의 사막', '붉은 모래폭풍', '저주받은 사구', '작열하는 잿빛 사막', '독사 사막'],
+    ['갈라진 대지', '끝없는 모래바다', '미라의 황야', '모래 무덤', '신기루 사막'],
+  ],
+  tundra: [
+    ['동토의 대지', '창백한 툰드라', '서리낀 이끼밭', '북풍의 거친 땅', '창빙의 벌판'],
+    ['마수 툰드라', '붉은 눈의 황야', '시체꽃 피는 동토', '혹한의 불모지', '죽음의 한파'],
+    ['고요한 동토', '경계의 툰드라', '눈보라 치는 무덤', '얼어붙은 황무지', '백색 불모지'],
+  ],
+  ice: [
+    ['만년설', '순백의 빙하', '빙룡의 안식처', '영구 결빙지', '하얀 지옥'],
+    ['칼날 얼음산', '피로 물든 빙하', '부서진 빙붕', '가라앉는 거대 얼음', '절망의 크레바스'],
+    ['망각의 눈밭', '어둠 속 빙하', '거인의 발자국', '얼음 장벽', '푸른 눈동자'],
   ],
   coastal: [
-    ['서해안 영지', '백사 항구', '철산 거점', '백설 포구', '서쪽 포구'],
-    ['동방 항구', '검은 항구', '동쪽 포구', '적조 포구', '화염 항구'],
-    ['무역 항구', '안개 항구', '중립 포구', '회색 포구', '경계 포구'],
+    ['서해안 영지', '백사 항구', '찰랑이는 해안', '백설 포구', '은빛 물결'],
+    ['동방 항구', '검은 항구', '해적단 둥지', '적조 포구', '붉은 산호 해안'],
+    ['버려진 해안', '안개 곶', '잿빛 해변', '경계 반도', '황량한 백사장'],
   ],
 };
 
@@ -306,13 +330,13 @@ function computeHeight(
   const plateIdx = getPlateIndex(px, py, plates);
   const plate = plates[plateIdx];
   const stress = plateBoundaryStress(px, py, plates);
-  const tectonicH = stress * 0.45;
+  const tectonicH = stress * 0.35; // 산맥 형성 비중 완화
 
   // 5. 미세 지형 노이즈 디테일 (자글자글한 점보딩 섬과 거친 지표면)
   const detailStr = fbm(heightNoise, nx * 12.0, ny * 12.0, 6) * 0.15;
 
   // 해양판은 고도를 낮추고 대륙판은 높임
-  const basalH = plate.isOceanic ? 0.0 : 0.45;
+  const basalH = plate.isOceanic ? 0.0 : 0.35; // 기본 고도 하향 (평야 중심 밸런싱)
 
   // 6. 전체 합성 고도 계산 (합산 후 borderDrop으로 해안선 깎기)
   let raw = basalH + (continentNoise * 0.3) + macroStr + tectonicH + detailStr - borderDrop;
@@ -323,16 +347,33 @@ function computeHeight(
 // ──────────────────────────────────────────────────────────────────────────────
 // 3. 지형 타입 분류
 // ──────────────────────────────────────────────────────────────────────────────
-function classifyTerrain(h: number, moisture: number): TerrainType {
+function classifyTerrain(h: number, moisture: number, temp: number): TerrainType {
   if (h < OCEAN_H)        return 'ocean';
   if (h < LAND_H_COASTAL) return 'coastal';
-  if (h > LAND_H_MOUNT)   return 'peak';
-  if (h > LAND_H_HIGH)    return 'mountain';
-  if (h > LAND_H_PLAINS)  return 'highland';
-  // h in [LAND_H_COASTAL, LAND_H_PLAINS] → 평야 구간
-  if (moisture > 0.55) return 'forest';
-  if (moisture < 0.30) return 'wasteland';
-  return 'plains';
+  
+  // 산맥지대
+  if (h > LAND_H_MOUNT) return (temp < 0.35) ? 'ice' : 'peak';
+  if (h > LAND_H_HIGH)  return 'mountain';
+  
+  // 구릉지대 (Hill)
+  if (h > LAND_H_PLAINS) {
+    if (temp < 0.3) return 'tundra';
+    return 'hill';
+  }
+
+  // 평지/저지대 (Plains & Forests)
+  if (temp < 0.35) { // 한대/냉대
+    if (moisture > 0.45) return 'taiga';
+    return 'tundra';
+  } else if (temp < 0.7) { // 온대
+    if (moisture > 0.55) return 'forest';
+    if (moisture < 0.35) return 'desert';
+    return 'plains';
+  } else { // 열대
+    if (moisture > 0.6) return 'forest'; // 정글을 숲으로 묶어 처리
+    if (moisture < 0.4) return 'desert';
+    return 'savanna';
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -344,8 +385,8 @@ function getTerrainName(
   isCoastal: boolean, // Province가 바다에 접해 있으면 해안 이름 우선
   nameIdx: number,    // 이름 풀 인덱스 (중복 방지)
 ): string {
-  // 해안 Province는 해안 이름 우선
-  const effectiveTerrain = (isCoastal && terrain !== 'peak' && terrain !== 'mountain')
+  // 해안 Province는 해안 이름 우선 (단 화산, 빙하 등 특수지형 제외)
+  const effectiveTerrain = (isCoastal && !['peak', 'mountain', 'ice'].includes(terrain))
     ? 'coastal'
     : terrain;
 
@@ -443,20 +484,29 @@ export function generateProvinces(
   const delaunay = Delaunay.from(microPts);
   const voronoi  = delaunay.voronoi([0, 0, svgW, svgH]);
 
-  // ── 5. 각 마이크로셀 고도 + 습도 + 지형 ──────────────────────────────────
+  // ── 5. 각 마이크로셀 고도 + 기온 + 습도 + 지형 ──────────────────────────
   const cellHeights: number[] = [];
   const cellMoistures: number[] = [];
+  const cellTemperatures: number[] = [];
   const cellTerrains: TerrainType[] = [];
 
   for (let i = 0; i < MICRO_CELLS; i++) {
     const nx = microPts[i][0] / svgW;
     const ny = microPts[i][1] / svgH;
     const h  = computeHeight(nx, ny, plates, heightNoise);
+    
+    // 온도: 위도 기반(중앙이 높음 1.0, 극지방 0.0) + 노이즈 편차
+    const baseTemp = 1.0 - Math.pow(Math.abs(ny - 0.5) * 2.0, 1.5);
+    const tempNoise = (fbm(heightNoise, nx * 3.0, ny * 3.0, 3) + 1) * 0.5;
+    const temp = Math.max(0, Math.min(1, baseTemp * 0.8 + tempNoise * 0.2));
+
     // 습도: 독립 노이즈 0~1 정규화
     const m  = (fbm(moistNoise, nx * 4, ny * 4) + 1) * 0.5;
+
     cellHeights.push(h);
     cellMoistures.push(m);
-    cellTerrains.push(classifyTerrain(h, m));
+    cellTemperatures.push(temp);
+    cellTerrains.push(classifyTerrain(h, m, temp));
   }
 
   const isLand  = cellTerrains.map(t => t !== 'ocean');
@@ -579,10 +629,10 @@ export function generateProvinces(
     count: number,
     faction: FactionId,
   ): SeedInfo[] {
-    // 평야/고원 최우선, 이어서 해안/산악 및 고도순 정렬
+    // 평야/구릉 지형 최우선, 이어서 해안/산악 및 고도순 정렬
     const sorted = [...cells].sort((a, b) => {
-      const pa = cellTerrains[a] === 'plains' || cellTerrains[a] === 'highland' ? 0 : 1;
-      const pb = cellTerrains[b] === 'plains' || cellTerrains[b] === 'highland' ? 0 : 1;
+      const pa = cellTerrains[a] === 'plains' || cellTerrains[a] === 'hill' ? 0 : 1;
+      const pb = cellTerrains[b] === 'plains' || cellTerrains[b] === 'hill' ? 0 : 1;
       return pa - pb || cellHeights[a] - cellHeights[b];
     });
 
@@ -737,6 +787,8 @@ export function generateProvinces(
       owner:       faction,
       isCapital,
       adjacentIds: Array.from(provAdjacency.get(id) ?? []),
+      isCoastal:   isCoast,
+      navalAdjacentIds: [], // 추후 해상 인접 계산을 통해 채워짐
       baseGoldProduction: Math.floor(rand() * 20) + 10,
       baseFoodProduction: Math.floor(rand() * 30) + 20,
       baseRecruitment: Math.floor(rand() * 10) + 5,
@@ -745,6 +797,9 @@ export function generateProvinces(
       gold:        Math.floor(rand() * 40) + 10,
       seedX:       s.px / svgW,
       seedY:       s.py / svgH,
+      terrainType: terrain,
+      temperature: cellTemperatures[s.mi],
+      moisture:    cellMoistures[s.mi],
     };
   });
 
@@ -1011,6 +1066,25 @@ export function generateProvinces(
           flux: flux[i] / RIVER_THRESHOLD,
           pts: rPts,
         });
+      }
+    }
+  }
+
+  // ── 16. 해상 인접(Naval Adjacency) 스캔 ────────────────────────────────
+  // 해안가(isCoastal) 영지들 간에 일정 해상 거리 이하라면 원정 상륙이 가능하도록 서로를 연결
+  // 너무 멀리 떨어진 신대륙까지 바로 가면 밸런스/시각 붕괴 우려가 있으므로, 근해(12% 거리)로 축소
+  const NAVAL_RANGE_SQR = 0.12 * 0.12; 
+  const coastalProvIds = Object.keys(provinces).filter(pid => provinces[pid].isCoastal);
+
+  for (let i = 0; i < coastalProvIds.length; i++) {
+    const pA = provinces[coastalProvIds[i]];
+    for (let j = i + 1; j < coastalProvIds.length; j++) {
+      const pB = provinces[coastalProvIds[j]];
+      // 같은 팩션이든 아니든 유클리드 거리상 가깝다면 도항 루트 오픈
+      const distSqr = (pA.seedX - pB.seedX) ** 2 + (pA.seedY - pB.seedY) ** 2;
+      if (distSqr <= NAVAL_RANGE_SQR) {
+        pA.navalAdjacentIds.push(pB.id);
+        pB.navalAdjacentIds.push(pA.id);
       }
     }
   }

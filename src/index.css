@@ -11,6 +11,14 @@ html, body, #root {
   font-family: 'Noto Sans KR', sans-serif;
 }
 
+/* 레트로 픽셀 아트 선명도 보존 */
+canvas {
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
 /* ════════════════════════════════════════
    타이틀 화면
 ════════════════════════════════════════ */

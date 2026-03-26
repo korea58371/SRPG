@@ -14,30 +14,8 @@ export default function ActionMenu({ camera }: { camera: { x: number; y: number;
   const enterAttackMode     = useGameStore(s => s.enterAttackTargetMode);
   const attackTargetMode    = useGameStore(s => s.attackTargetMode);
   const units               = useGameStore(s => s.units);
-  const cancelConfirmed     = useGameStore(s => s.cancelConfirmedMove);
 
-  if (attackTargetMode && confirmedDest) {
-    const px = tileToPixel(confirmedDest.lx);
-    const py = tileToPixel(confirmedDest.ly);
-    const angle = Math.PI / 4;
-    const rx = px * Math.cos(angle) - py * Math.sin(angle);
-    const ry = px * Math.sin(angle) + py * Math.cos(angle);
-    const screenX = camera.x + rx * 1 * camera.scale;
-    const screenY = camera.y + ry * 0.5 * camera.scale;
-
-    return (
-      <div className="absolute z-50 pointer-events-auto" style={{ left: screenX + 24 * camera.scale, top: screenY - 50 }}>
-        <div className="bg-red-900/90 border border-red-500 rounded-xl px-4 py-2 text-xs font-bold text-red-200 shadow-xl backdrop-blur-sm flex items-center gap-2">
-          <span>⚔️</span>
-          <span>공격할 적군을 클릭하세요</span>
-          <button
-            className="ml-2 text-gray-300 hover:text-white cursor-pointer"
-            onClick={cancelConfirmed}
-          >✕</button>
-        </div>
-      </div>
-    );
-  }
+  if (attackTargetMode) return null; // 공격 모드일 때는 ActionMenu가 아니라 하단 HUD에서 안내 표시
 
   if (!confirmedDest || !selectedUnitId) return null;
 

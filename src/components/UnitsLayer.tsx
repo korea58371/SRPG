@@ -13,7 +13,7 @@ import { Container, Sprite, Text, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { useShallow } from 'zustand/react/shallow';
 import { MAP_CONFIG, FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
-import { useGameStore, tileToPixel } from '../store/gameStore';
+import { useGameStore, tileToPixel, getAttackableTargets } from '../store/gameStore';
 import { getUnitTypeTexture } from '../utils/unitTextures';
 
 const MOVE_SPEED = 6;
@@ -120,6 +120,62 @@ function UnitSprite({ id }: { id: string }) {
   // 선택된 유닛은 흰색 외곽선(배경을 흰색으로)
   const bgColor = isSelected ? 0xffffff : color;
 
+  const hasActed  = unit.ct < 100;
+  const attackMode = useGameStore(s => s.attackTargetMode);
+  const activeUnit = useGameStore(s => s.activeUnitId ? s.units[s.activeUnitId] : null);
+  const isTargetableEnemy = attackMode && activeUnit && unit.factionId !== activeUnit.factionId;
+
+  let cursorType = 'default';
+  if (isActive && !hasActed) cursorType = 'pointer';
+  else if (isTargetableEnemy) cursorType = 'crosshair';
+
+  // ─── 공통 onpointerdown 핸들러 ─────────────────────────────────────────────
+  const handlePointerDown = (e: PIXI.FederatedPointerEvent) => {
+    if (e.button === 2) return; // 우클릭 무시
+    const state = useGameStore.getState();
+    const clickedUnit = state.units[id];
+    if (!clickedUnit) return;
+
+    const isAlly = clickedUnit.factionId === PLAYER_FACTION;
+    const isEnemy = !isAlly;
+
+    // ─ 공격 대상 선택 로직 ─
+    if (state.attackTargetMode && state.confirmedDestination && state.selectedUnitId) {
+      e.stopPropagation();
+      if (isAlly || clickedUnit.state === 'DEAD') return;
+      const attacker = state.units[state.selectedUnitId];
+      if (!attacker) return;
+      const dest = state.confirmedDestination;
+      const validTargets = getAttackableTargets(attacker, state.units, dest.lx, dest.ly);
+      if (!validTargets.some(t => t.id === id)) return;
+      state.executeAttackOnTarget(id);
+      return;
+    }
+
+    // ─ 이동 모드 or 대기 상태 ─
+    if (state.confirmedDestination) return;
+    if (isEnemy) return; // 버블링 허용 → App.tsx 타일 이동 처리
+
+    // ─ 아군 유닛 선택 / 제자리 행동 ─
+    e.stopPropagation();
+    if (state.selectedUnitId === id) {
+      const u = state.units[id];
+      if (u && state.activeUnitId === id) state.confirmMove(u.logicalX, u.logicalY);
+      return;
+    }
+    selectUnit(id);
+    // 사방이 막혀 이동 불가한 경우, 선택 즉시 제자리 confirmMove → ActionMenu 바로 표시
+    // (moveRangeTiles는 selectUnit 후 재계산되므로 다음 tick에서 확인)
+    setTimeout(() => {
+      const st = useGameStore.getState();
+      if (st.selectedUnitId === id && st.activeUnitId === id && st.moveRangeTiles.size === 0) {
+        const u = st.units[id];
+        if (u) st.confirmMove(u.logicalX, u.logicalY);
+      }
+    }, 0);
+
+  };
+
   return (
     <Container
       ref={containerRef}
@@ -129,48 +185,25 @@ function UnitSprite({ id }: { id: string }) {
       alpha={alpha}
       zIndex={visualY}
       eventMode="static"
-      cursor={isActive ? 'pointer' : 'default'}
-      onpointerenter={() => setHoveredUnit(id)}
-      onpointerleave={() => setHoveredUnit(null)}
-      onclick={() => {
-        const state = useGameStore.getState();
-
-        if (state.attackTargetMode && state.confirmedDestination && state.selectedUnitId) {
-          const clickedUnit = state.units[id];
-          const attacker = state.units[state.selectedUnitId];
-          if (!clickedUnit || !attacker) return;
-          if (clickedUnit.factionId === attacker.factionId) return;
-          if (clickedUnit.state === 'DEAD') return;
-          const dist = Math.abs(clickedUnit.logicalX - state.confirmedDestination.lx)
-                     + Math.abs(clickedUnit.logicalY - state.confirmedDestination.ly);
-          if (dist > attacker.attackRange) return;
-          state.executeAttackOnTarget(id);
-          return;
-        }
-
-        // ─ 일반 유닛 선택 / 제자리 행동
-        if (state.confirmedDestination) return;
-
-        if (state.selectedUnitId === id) {
-          // 이미 선택된 유닛 재클릭 → 제자리 행동 메뉴
-          const u = state.units[id];
-          if (u && state.activeUnitId === id) state.confirmMove(u.logicalX, u.logicalY);
-          return;
-        }
-        selectUnit(id);
-      }}
+      hitArea={null as unknown as PIXI.IHitArea}
     >
-      {/* 쿼터뷰에서 유닛 스프라이트가 기울어지거나 납작해지지 않도록, 카메라를 똑바로 보도록 역(Inverse) 변환 */}
-      {/* 부모가 S(1, 0.5) * R(45) 이므로 원래 역변환은 R(-45) * S(1, 2) 지만, 유닛을 50% 축소하기 위해 S(0.5, 1) 적용 */}
+      {/* 쿼터뷰 역변환: 스프라이트를 화면상 직립으로 그림 */}
       <Container rotation={-Math.PI / 4} scale={{ x: 0.5, y: 1.0 }}>
         
-        {/* 배경 사각형 (세력 색상) -> 쿼터뷰 역변환 상태이므로 정사각형으로 반듯하게 섭니다 */}
+        {/* [핵심] 배경 Sprite에 이벤트 핸들러를 달아,
+             역변환된 실제 화면 위치에서 hit detection이 이루어지도록 함.
+             (외부 Container의 hitArea는 아이소메트릭 변환으로 왜곡됨) */}
         <Sprite
           texture={PIXI.Texture.WHITE}
           tint={bgColor}
           width={MAP_CONFIG.TILE_SIZE * 0.8}
           height={MAP_CONFIG.TILE_SIZE * 0.8}
-          anchor={{ x: 0.5, y: 1.0 }} // 하단 중앙을 기준점으로 (타일 딛고 서 있도록 설정)
+          anchor={{ x: 0.5, y: 1.0 }}
+          eventMode="static"
+          cursor={cursorType}
+          onpointerenter={() => setHoveredUnit(id)}
+          onpointerleave={() => setHoveredUnit(null)}
+          onpointerdown={handlePointerDown}
         />
         
         {/* 병종 아이콘 */}
@@ -180,18 +213,18 @@ function UnitSprite({ id }: { id: string }) {
             width={MAP_CONFIG.TILE_SIZE * 0.6}
             height={MAP_CONFIG.TILE_SIZE * 0.6}
             anchor={0.5}
-            y={-12} // 배경 중앙보다 살짝 위로
+            y={-12}
             alpha={0.9}
           />
         )}
         
-        {/* 장수(GENERAL)일 경우 왕관 표시 추가 등 */}
+        {/* 장수(GENERAL) 왕관 표시 */}
         {unit.unitType === 'GENERAL' && (
           <Text
             text="👑"
             style={new PIXI.TextStyle({ fontSize: 14 })}
             anchor={0.5}
-            y={-24} // 아이콘 위쪽에 배치
+            y={-24}
           />
         )}
 
@@ -220,6 +253,7 @@ function UnitSprite({ id }: { id: string }) {
     </Container>
   );
 }
+
 
 export default function UnitsLayer() {
   const unitIds = useGameStore(useShallow(s =>

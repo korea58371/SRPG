@@ -246,9 +246,18 @@ export const StrategyMapScreen = () => {
     if (hasDragged.current) return;
     if (hoveredProvinceId && hoveredProvinceId !== selectedProvinceId) {
       selectProvince(hoveredProvinceId);
+    } else if (!hoveredProvinceId) {
+      // 빈 바다를 클릭한 경우 선택 해제
+      selectProvince(null);
     } else if (hoveredProvinceId === selectedProvinceId) {
       selectProvince(null);
     }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (hasDragged.current) return;
+    selectProvince(null); // 우클릭 시 무조건 선택 해제
   };
 
 
@@ -352,10 +361,13 @@ export const StrategyMapScreen = () => {
     : (provinces as Record<string, Province>);
   const selectedProvince = selectedProvinceId ? activeProvinces[selectedProvinceId] : null;
 
-  // 선전포고 가능 여부: 선택된 Province가 적 소유이고, 플레이어 영지 중 인접한 곳이 존재하는지 확인
+  // 선전포고 가능 여부: 선택된 Province가 적 소유이고, 육로 인접(adjacentIds) 혹은 해상 원정(navalAdjacentIds) 가능한 아군 영지가 있는지 확인
   const attackerProvinceId = selectedProvinceId && selectedProvince && selectedProvince.owner !== PLAYER_FACTION
     ? Object.values(activeProvinces).find(
-        p => p.owner === PLAYER_FACTION && p.adjacentIds.includes(selectedProvinceId)
+        p => p.owner === PLAYER_FACTION && (
+          p.adjacentIds.includes(selectedProvinceId) || 
+          (p.isCoastal && selectedProvince.isCoastal && (p.navalAdjacentIds || []).includes(selectedProvinceId))
+        )
       )?.id ?? null
     : null;
   const canDeclareWar = attackerProvinceId !== null && selectedProvinceId !== null;
@@ -377,6 +389,19 @@ export const StrategyMapScreen = () => {
   const drawMapBase = useCallback((g: PIXI.Graphics) => {
     if (!parsedCells) return;
     g.clear();
+
+    // 딤(Dim) 처리 대상 판별용 상태 구성
+    const selectedProv = selectedProvinceId ? activeProvinces[selectedProvinceId] : null;
+    const isPlayerSelected = selectedProv && selectedProv.owner === PLAYER_FACTION;
+    const interactableSet = new Set<string>();
+    
+    if (isPlayerSelected && selectedProv) {
+      interactableSet.add(selectedProv.id);
+      selectedProv.adjacentIds.forEach(id => interactableSet.add(id));
+      if (selectedProv.isCoastal && selectedProv.navalAdjacentIds) {
+        selectedProv.navalAdjacentIds.forEach(id => interactableSet.add(id));
+      }
+    }
 
     const getFillColor = (_idx: number, cell: typeof parsedCells[0]): number => {
       // 바다: BFS 거리 기반 (육지에 가까울수록 1, 멀어질수록 큰 값)
@@ -404,20 +429,28 @@ export const StrategyMapScreen = () => {
 
     for (let i = 0; i < parsedCells.length; i++) {
       const c = parsedCells[i];
-      const color = getFillColor(i, c);
+      let color = getFillColor(i, c);
+      let alpha = c.isOcean ? 1 : (mapMode === 'faction' && (!c.faction) ? 0.3 : 0.85);
 
-      g.lineStyle(0);
-
-      if (c.isOcean) {
-        g.beginFill(color, 1);
-      } else {
-        g.beginFill(color, mapMode === 'faction' && (!c.faction) ? 0.3 : 0.85);
+      // 내가 선택한 영지가 존재할 때, 나머지 비상호작용 영토(바다 제외)를 딤 처리 (어둡게 만들기)
+      if (isPlayerSelected && !c.isOcean && c.provinceId) {
+        if (!interactableSet.has(c.provinceId)) {
+          // 기존 알파(투명도)를 낮추는 방식 대신, RGB 고유 색상의 명도를 확 낮춰 묵직하게 어둡게 표현
+          const r = Math.floor(((color >> 16) & 0xff) * 0.25);
+          const g = Math.floor(((color >> 8) & 0xff) * 0.25);
+          const b = Math.floor((color & 0xff) * 0.25);
+          color = (r << 16) | (g << 8) | b;
+          // 약간의 투명도만 살짝 주어 배경과 이질감을 없앰
+          alpha *= 0.9;
+        }
       }
 
+      g.lineStyle(0);
+      g.beginFill(color, alpha);
       g.drawPolygon(c.polygon);
       g.endFill();
     }
-  }, [parsedCells, mapMode]);
+  }, [parsedCells, mapMode, selectedProvinceId, activeProvinces]);
 
   // 1-5. 대륙 해안선
   const shadowLayersRef = useRef<{ mask: PIXI.Graphics, l1: PIXI.Graphics, l2: PIXI.Graphics, l3: PIXI.Graphics } | null>(null);
@@ -521,30 +554,58 @@ export const StrategyMapScreen = () => {
     if (!boundaryEdges || !coastlineEdges) return;
     g.clear();
 
-    // 1-1. 일반 영지 경계선 (요청에 따라 명도를 더 낮추어 확실히 어둡게: 0x5a4a40)
-    g.lineStyle({ width: 1.0, color: 0x5a4a40, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
+    // 딤 처리 기준 세트
+    const selectedProv = selectedProvinceId ? activeProvinces[selectedProvinceId] : null;
+    const isPlayerSelected = selectedProv && selectedProv.owner === PLAYER_FACTION;
+    const interactableSet = new Set<string>();
+    
+    if (isPlayerSelected && selectedProv) {
+      interactableSet.add(selectedProv.id);
+      selectedProv.adjacentIds.forEach(id => interactableSet.add(id));
+      if (selectedProv.isCoastal && selectedProv.navalAdjacentIds) {
+        selectedProv.navalAdjacentIds.forEach(id => interactableSet.add(id));
+      }
+    }
+
+    const darkenColor = (color: number) => {
+      const r = Math.floor(((color >> 16) & 0xff) * 0.25);
+      const g = Math.floor(((color >> 8) & 0xff) * 0.25);
+      const b = Math.floor((color & 0xff) * 0.25);
+      return (r << 16) | (g << 8) | b;
+    };
+
+    // 1-1. 일반 영지 경계선
     boundaryEdges.forEach(e => {
       if (e.isFactionBoundary) return;
+      let color = 0x5a4a40;
+      if (isPlayerSelected && !interactableSet.has(e.provIdA || '') && !interactableSet.has(e.provIdB || '')) {
+        color = darkenColor(color);
+      }
+      g.lineStyle({ width: 1.0, color, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       g.moveTo(e.pts[0], e.pts[1]);
       for (let i = 2; i < e.pts.length; i += 2) g.lineTo(e.pts[i], e.pts[i + 1]);
     });
 
-    // 1-2. 세력 경계선 (원래 alpha 0.9였음 -> 0.85 하에서 거의 동일하므로 기존 색상 유지: 0x4a3b32)
-    g.lineStyle({ width: 1.2, color: 0x4a3b32, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
+    // 1-2. 세력 경계선
     boundaryEdges.forEach(e => {
       if (!e.isFactionBoundary) return;
+      let color = 0x4a3b32;
+      if (isPlayerSelected && !interactableSet.has(e.provIdA || '') && !interactableSet.has(e.provIdB || '')) {
+        color = darkenColor(color);
+      }
+      g.lineStyle({ width: 1.2, color, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       g.moveTo(e.pts[0], e.pts[1]);
       for (let i = 2; i < e.pts.length; i += 2) g.lineTo(e.pts[i], e.pts[i + 1]);
     });
 
-    // 1-3. 대륙 해안선 (얇고 밝게 원상복구. 원래 width 1.5, color 0x3d3027 이었음)
+    // 1-3. 대륙 해안선 (바다 경계라 항상 밝음 유지 가능, 필요시 동일 적용)
     g.lineStyle({ width: 1.5, color: 0x3d3027, alpha: 1.0, alignment: 0.5, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
     for (let i = 0; i < coastlineEdges.length; i++) {
         const edge = coastlineEdges[i];
         g.moveTo(edge.pts[0], edge.pts[1]);
         for (let j = 2; j < edge.pts.length; j += 2) g.lineTo(edge.pts[j], edge.pts[j + 1]);
     }
-  }, [boundaryEdges, coastlineEdges]);
+  }, [boundaryEdges, coastlineEdges, selectedProvinceId, activeProvinces]);
 
   // 4. 호버 및 선택 영역 하이라이트 (Fill, Glow, Core 3단 분리)
   const drawHighlightsInner = useCallback((g: PIXI.Graphics, mode: 'fill' | 'glow' | 'core') => {
@@ -675,11 +736,64 @@ export const StrategyMapScreen = () => {
     }
 
     if (selectedProvinceId) {
-      if (mode === 'fill') drawTargetProv(selectedProvinceId, 0xfcd34d, 0.7, 0);
+      const p = activeProvinces[selectedProvinceId];
+      if (mode === 'fill') {
+        drawTargetProv(selectedProvinceId, 0xfcd34d, 0.7, 0);
+        // 플레이어 영지 선택 시, 이동/공격 가능한 인접 육로와 해로를 시각적으로 가이드
+        if (p && p.owner === PLAYER_FACTION) {
+          p.adjacentIds.forEach(adjId => drawTargetProv(adjId, 0xffffff, 0.15, 0));
+          if (p.isCoastal) {
+            (p.navalAdjacentIds || []).forEach(navId => drawTargetProv(navId, 0x3b82f6, 0.25, 0));
+          }
+        }
+      }
       else if (mode === 'glow') drawTargetProv(selectedProvinceId, 0xfcd34d, 1.0, 0); // width는 glow 내부에서 1.5로 고정
       else if (mode === 'core') drawTargetProv(selectedProvinceId, 0xffffff, 1.0, 1.5);
     }
-  }, [parsedCells, hoveredProvinceId, selectedProvinceId]);
+  }, [parsedCells, hoveredProvinceId, selectedProvinceId, activeProvinces]);
+
+  // 해상 원정(도항) 시각화 화살표
+  const drawExpeditionArrow = useCallback((g: PIXI.Graphics) => {
+    g.clear();
+    // 출발지: 현재 선택된 영지 (플레이어의 해안가 영지)
+    // 도착지: 현재 호버 중인 영지 (바다 건너의 상륙 적합지)
+    if (!selectedProvinceId || !hoveredProvinceId || selectedProvinceId === hoveredProvinceId) return;
+
+    const pA = activeProvinces[selectedProvinceId];
+    const pB = activeProvinces[hoveredProvinceId];
+
+    // 플레이어 영지에서 시작해야 하며, 육로가 아닌 해상으로 인접한 경우에만 점선 화살표를 표시
+    if (!pA || !pB || pA.owner !== PLAYER_FACTION || !pA.isCoastal || !pB.isCoastal) return;
+    if (pA.adjacentIds.includes(pB.id)) return; // 육로 인접이면 화살표 패스
+    if (!(pA.navalAdjacentIds || []).includes(pB.id)) return;
+
+    // 두 점 사이의 곡선(원정 항로) 그리기
+    const cA = centers.find(c => c.id === pA.id);
+    const cB = centers.find(c => c.id === pB.id);
+    if (!cA || !cB) return;
+
+    const dx = cB.x - cA.x;
+    const dy = cB.y - cA.y;
+    
+    // 바다를 횡단하는 둥근 궤적을 위해 약간 휜 제어점 배정
+    const midX = (cA.x + cB.x) / 2 - dy * 0.15;
+    const midY = (cA.y + cB.y) / 2 + dx * 0.15;
+
+    // 해로 화살표 베이스 궤적
+    g.lineStyle({ width: 4, color: 0x60a5fa, alpha: 0.8, cap: PIXI.LINE_CAP.ROUND });
+    g.moveTo(cA.x, cA.y);
+    g.quadraticCurveTo(midX, midY, cB.x, cB.y);
+    
+    // 뾰족한 화살표 머리
+    const angle = Math.atan2(cB.y - midY, cB.x - midX);
+    const headLen = 18;
+    g.lineStyle({ width: 5, color: 0x60a5fa, alpha: 1.0, cap: PIXI.LINE_CAP.ROUND });
+    g.moveTo(cB.x, cB.y);
+    g.lineTo(cB.x - headLen * Math.cos(angle - Math.PI / 6), cB.y - headLen * Math.sin(angle - Math.PI / 6));
+    g.moveTo(cB.x, cB.y);
+    g.lineTo(cB.x - headLen * Math.cos(angle + Math.PI / 6), cB.y - headLen * Math.sin(angle + Math.PI / 6));
+    
+  }, [selectedProvinceId, hoveredProvinceId, activeProvinces, centers]);
 
   // PIXI.Graphics가 리렌더링마다 텍스쳐를 지우지 않도록 안정적인 useCallback 생성
   const drawHighlightsFill = useCallback((g: PIXI.Graphics) => drawHighlightsInner(g, 'fill'), [drawHighlightsInner]);
@@ -758,6 +872,7 @@ export const StrategyMapScreen = () => {
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
         onClick={handleCanvasClick}
+        onContextMenu={handleContextMenu}
       >
         <Stage
           width={dimensions.w}
@@ -864,6 +979,11 @@ export const StrategyMapScreen = () => {
               <PixiGraphics draw={drawHighlightsCore} />
             </Container>
 
+            {/* 8.5 바다 건너 침공 원정 화살표 */}
+            <Container name="L8.5-ExpeditionArrow" zIndex={78}>
+              <PixiGraphics draw={drawExpeditionArrow} />
+            </Container>
+
 
 
             {/* 9. LOD 1단계: 멀리서 줌 아웃 시 국가(세력) 거시 이름만 노출 */}
@@ -956,10 +1076,30 @@ export const StrategyMapScreen = () => {
           </div>
 
           <div className="space-y-4 text-sm mt-2 font-mono">
+            {/* 지형 환경 및 기후 스펙 */}
+            <div className="grid grid-cols-3 gap-2 bg-slate-800/80 p-2.5 rounded border border-slate-700 mb-1 shadow-inner">
+              <div className="col-span-3 pb-1.5 border-b border-slate-700/50 mb-1 flex justify-between items-center">
+                <span className="text-slate-400 text-xs font-bold tracking-widest">BIOME</span>
+                <span className="text-sky-300 font-bold uppercase drop-shadow-sm">{selectedProvince.terrainType}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">기온(위도)</span>
+                <span className="font-bold text-red-300">{(selectedProvince.temperature * 100).toFixed(0)}°</span>
+              </div>
+              <div>
+                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">습윤도</span>
+                <span className="font-bold text-blue-300">{(selectedProvince.moisture * 100).toFixed(0)}%</span>
+              </div>
+              <div>
+                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">지형 보너스</span>
+                <span className="font-bold text-emerald-300">N/A</span>
+              </div>
+            </div>
+
             {/* 스탯 표시 */}
-            <div className="grid grid-cols-2 gap-3 bg-slate-800/50 p-3 rounded border border-slate-700">
+            <div className="grid grid-cols-2 gap-3 bg-slate-800/50 p-2.5 rounded border border-slate-700">
               <div><span className="text-slate-500 text-xs block mb-1">치안도</span><span className="font-bold text-emerald-400">{selectedProvince.security}%</span></div>
-              <div><span className="text-slate-500 text-xs block mb-1">지배력</span><span className="font-bold text-blue-400">안정</span></div>
+              <div><span className="text-slate-500 text-xs block mb-1">지배력</span><span className="font-bold text-indigo-400">안정</span></div>
             </div>
 
             <div className="space-y-2 pt-2 border-t border-slate-700/50">

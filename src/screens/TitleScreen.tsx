@@ -24,6 +24,17 @@ export default function TitleScreen() {
           <button className="title-btn-secondary" disabled>
             📖 이어하기 <span className="title-btn-soon">(준비 중)</span>
           </button>
+          <button 
+            onClick={() => {
+              useAppStore.setState({ 
+                pendingBattle: { attackerProvinceId: 'prov_0', defenderProvinceId: 'prov_1' } 
+              });
+              useAppStore.getState().goTo('BATTLE');
+            }}
+            style={{ marginTop: '10px', padding: '10px', background: 'red', color: 'white', zIndex: 9999, fontWeight: 'bold' }}
+          >
+            🚨 DEBUG: 바로 전투 진입
+          </button>
         </div>
 
         <p className="title-version">v0.1.0 — Phase 1 Build</p>

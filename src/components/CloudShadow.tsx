@@ -1,23 +1,27 @@
 import { useRef, useMemo, useState, useEffect } from 'react';
-import { TilingSprite, useTick } from '@pixi/react';
+import { Container, Sprite, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { ENVIRONMENT_CONFIG } from '../constants/gameConfig';
 
+// 4x4 그리드를 만들기 위한 배열 (1개의 크기 1000px -> 총 4000x4000 영역 커버)
+const TILE_GRID = [0, 1, 2, 3];
+const TILE_SIZE = 1000;
+
 export default function CloudShadow() {
-  const spriteRef = useRef<PIXI.TilingSprite>(null);
+  const containerRef = useRef<PIXI.Container>(null);
   
   // 구름 효과를 내기 위한 임시 Procedural SVG
   // 패턴이 반복될 때 자연스럽도록 가장자리가 부드러운 구름을 생성합니다.
   const cloudTexture = useMemo(() => {
     const svgData = `
-    <svg width="800" height="800" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${TILE_SIZE}" height="${TILE_SIZE}" xmlns="http://www.w3.org/2000/svg">
       <filter id="blur" x="-50%" y="-50%" width="200%" height="200%">
         <feGaussianBlur stdDeviation="80"/>
       </filter>
-      <!-- 가장자리 타일링 연결부를 자연스럽게 하기 위해 위치를 중앙으로 모으고 부드럽게 퍼지게 함 -->
-      <circle cx="200" cy="200" r="150" fill="black" filter="url(#blur)" opacity="0.6"/>
-      <circle cx="600" cy="300" r="200" fill="black" filter="url(#blur)" opacity="0.8"/>
-      <circle cx="350" cy="600" r="220" fill="black" filter="url(#blur)" opacity="0.7"/>
+      <!-- Scattered clouds for natural tiling -->
+      <circle cx="300" cy="300" r="200" fill="black" filter="url(#blur)" opacity="0.6"/>
+      <circle cx="700" cy="400" r="250" fill="black" filter="url(#blur)" opacity="0.8"/>
+      <circle cx="450" cy="800" r="180" fill="black" filter="url(#blur)" opacity="0.7"/>
     </svg>`;
     const cloudUrl = `data:image/svg+xml;base64,${btoa(svgData)}`;
     return PIXI.Texture.from(cloudUrl);
@@ -35,30 +39,44 @@ export default function CloudShadow() {
   }, [cloudTexture]);
 
   useTick((delta) => {
-    if (!spriteRef.current) return;
+    if (!containerRef.current) return;
     
-    // TilingSprite는 tilePosition을 이동시켜 레이어 자체는 고정된 채 패턴만 흐르게 합니다.
-    spriteRef.current.tilePosition.x += ENVIRONMENT_CONFIG.CLOUD_SPEED_X * Number(delta);
-    spriteRef.current.tilePosition.y += ENVIRONMENT_CONFIG.CLOUD_SPEED_Y * Number(delta);
+    // TilingSprite의 tilePosition 이동을 Container 이동으로 직접 에뮬레이션합니다.
+    containerRef.current.x += ENVIRONMENT_CONFIG.CLOUD_SPEED_X * Number(delta);
+    containerRef.current.y += ENVIRONMENT_CONFIG.CLOUD_SPEED_Y * Number(delta);
+
+    // X 속도가 전진(+)인 경우, 맵을 충분히 덮은 타일 1개 분량만큼 이동하면 다시 뒤로 당겨 무한 타일링(Loop)을 구현합니다.
+    if (containerRef.current.x > 0) containerRef.current.x -= TILE_SIZE;
+    if (containerRef.current.y > 0) containerRef.current.y -= TILE_SIZE;
   });
 
   if (!isLoaded) return null;
 
   return (
-    <TilingSprite
-      ref={spriteRef}
-      texture={cloudTexture}
-      tilePosition={{ x: 0, y: 0 }}
-      // 맵 전체를 덮도록 충분히 넓은 영역 지정 (등각투영 변환 후에도 덮여야 함)
-      width={4000}  
-      height={4000} 
-      // 구름 패턴 자체의 크기는 30% 로 축소 (유저 요청 반영)
-      tileScale={{ x: 0.3, y: 0.3 }}
+    <Container
+      ref={containerRef}
+      // 컨테이너 자체를 -1000 ~ 0 사이에서 계속 순환시킴으로써, 내부에 배열된 첫 스프라이트가 항상 화면 좌상단 너머를 덮게 함
+      x={-TILE_SIZE}
+      y={-TILE_SIZE}
       alpha={ENVIRONMENT_CONFIG.CLOUD_IMG_OPACITY}
-      x={-1000} // x, y 범위를 -1000부터 시작하게 해서 중앙 맵 전체를 덮음
-      y={-1000}
       zIndex={400000} // FogLayer(300000)보다 높게 설정하여 안개 위에 렌더링
-      blendMode={PIXI.BLEND_MODES.MULTIPLY} // 하위 레이어와 섞여 실제 어두운 구름 그림자 느낌
-    />
+      eventMode="none"  // 클릭 이벤트를 가로체지 않도록 (4000x4000 커버 때문에 필수)
+    >
+      {/* 4x4 (16개)의 Sprite를 바둑판 배열하여 총 4000x4000 넓이를 덮음 */}
+      {TILE_GRID.map(xi =>
+        TILE_GRID.map(yi => (
+          <Sprite
+            key={`${xi}-${yi}`}
+            texture={cloudTexture}
+            x={xi * TILE_SIZE}
+            y={yi * TILE_SIZE}
+            width={TILE_SIZE}
+            height={TILE_SIZE}
+            blendMode={PIXI.BLEND_MODES.MULTIPLY}
+            eventMode="none"
+          />
+        ))
+      )}
+    </Container>
   );
 }

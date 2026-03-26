@@ -42,6 +42,8 @@ export interface Province {
   owner: FactionId;
   isCapital: boolean;         // 본거지: 함락 시 즉시 배드엔딩
   adjacentIds: string[];      // 인접 Province ID 목록 (전쟁 가능 여부)
+  isCoastal: boolean;         // 해안가 닿아있는지 여부
+  navalAdjacentIds: string[]; // 바다를 통해 상륙 가능한 영지 목록 (항구 출항 시)
   
   // ─ 내정 수치 (Domestic) ──────────────────────────────────
   baseGoldProduction: number;   // 기본 금 생산량
@@ -51,6 +53,11 @@ export interface Province {
   
   food: number;                 // (보유 식량 - 점진적으로 팩션 전역으로 이전될 수 있음)
   gold: number;                 // (보유 금)
+
+  // ─ 지리 및 생태 환경 (Geography & Biomes) ───────────────
+  terrainType: string;          // 대표 지형 타입 (사막, 툰드라, 평야 등)
+  temperature: number;          // 평균 기온 (0.0 극지방 ~ 1.0 적도)
+  moisture: number;             // 평균 습도 (0.0 건조 ~ 1.0 습윤)
 
   // Voronoi 시드 좌표 (0~1 정규화)
   seedX: number;

@@ -17,13 +17,13 @@ export function getTileDarkness(x: number, y: number, w: number, h: number): num
   // 중앙으로부터의 정규화된 절대 거리 (0 ~ 1)
   const nx = Math.abs(x - cx + 0.5) / cx;
   const ny = Math.abs(y - cy + 0.5) / cy;
-  
+
   // 쿼터뷰(Isometric) 적용 시, 로지컬 그리드의 정사각형 둘레(Math.max)가 화면상 완벽한 중앙 대칭 정 마름모로 나타납니다.
   const dist = Math.max(nx, ny);
-  
+
   // 거리가 0.6 이하인 중앙 뷰 영역은 이동 가능 구역(안개 0) - 가로/세로 기준 정확히 중심 60% 면적
   if (dist <= 0.6) return 0;
-  
+
   // 0.6 부터 1.0(가장자리)까지 부드러운 그라데이션 안개
   // 단, 이동 한계 경계선을 확실히 인지할 수 있도록 0.6을 넘자마자 즉시 20%(0.2)의 불투명도를 부여합니다.
   const factor = 0.2 + ((dist - 0.6) / 0.4) * 0.8;
@@ -98,12 +98,12 @@ export const UNIT_MATCHUPS = {
   ARCHER: { advantage: 'NONE', disadvantage: 'NONE', bonus: 0 },
 };
 
-export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number }> = {
-  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 3,   attackRange: 1 },
-  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 2.5, attackRange: 2 },
-  CAVALRY:  { hp:  80, attack: 20, defense:  8, speed: 4,   attackRange: 1 },
-  ARCHER:   { hp:  60, attack: 18, defense:  5, speed: 3,   attackRange: 3 },
-  GENERAL:  { hp:  80, attack: 10, defense: 12, speed: 2.5, attackRange: 1 }, // 장수: 낙은 화력, 높은 학실
+export const BASE_STATS: Record<string, { hp: number; attack: number; defense: number; speed: number; attackRange: number; moveSteps: number }> = {
+  INFANTRY: { hp: 100, attack: 15, defense: 10, speed: 40, attackRange: 1, moveSteps: 4 }, // 보병: 이동 4칸
+  SPEARMAN: { hp: 120, attack: 12, defense: 15, speed: 30, attackRange: 2, moveSteps: 3 }, // 창병: 이동 3칸 (느림)
+  CAVALRY:  { hp: 80,  attack: 20, defense: 8,  speed: 50, attackRange: 1, moveSteps: 6 }, // 기병: 이동 6칸 (빠름)
+  ARCHER:   { hp: 60,  attack: 18, defense: 5,  speed: 40, attackRange: 3, moveSteps: 4 }, // 궁병: 이동 4칸
+  GENERAL:  { hp: 80,  attack: 10, defense: 12, speed: 30, attackRange: 1, moveSteps: 3 }, // 장수: 이동 3칸
 };
 
 // ─ CT(Charge Time) 시스템 ─────────────────────────────────────────

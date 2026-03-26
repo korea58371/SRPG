@@ -521,18 +521,7 @@ export function generateMapTexture(
     }
   }
 
-  // 그리드 라인 오버레이 생략 (쿼터뷰 시 마름모꼴 자체가 그리드를 잘 보여줌)
-  // 그래도 연한 라인을 남기고 싶다면 주석 해제 가능
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-  ctx.beginPath();
-  for (let x = 0; x <= canvas.width; x += tileSize) {
-    ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
-  }
-  for (let y = 0; y <= canvas.height; y += tileSize) {
-    ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
-  }
-  ctx.stroke();
+  // 그리드 라인 오버레이 생략 (동적 로컬 그리드로 대체됨)
 
   return canvas;
 }

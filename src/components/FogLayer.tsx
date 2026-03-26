@@ -15,8 +15,9 @@ export default function FogLayer() {
       texture={texture} 
       x={-6 * MAP_CONFIG.TILE_SIZE}
       y={-6 * MAP_CONFIG.TILE_SIZE}
-      zIndex={300000} // 유닛, 프롭 등 맵 위의 모든 요소들(높아도 보통 10000미만) 위에 위치
-      alpha={1} 
+      zIndex={300000}
+      alpha={1}
+      eventMode="none"
     />
   );
 }

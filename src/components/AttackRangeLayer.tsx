@@ -1,27 +1,19 @@
-// J:/AI/Game/SRPG/src/components/AttackRangeLayer.tsx
-// 이동 확정 후 공격 범위 타일 표시 + 타겟 클릭 선택
-//
+// 이동 확정 후 공격 범위 타일 시각적 표시 (이벤트 처리 없음 - 클릭은 UnitsLayer에서 처리)
 // 거리 계산: 맨해튼(|dx|+|dy|) → 십자형/다이아몬드 형태 (SRPG 표준)
-// attackTargetMode가 true일 때 적군 타일 클릭 → executeAttackOnTarget 호출
 
 import { useCallback } from 'react';
 import { Graphics } from '@pixi/react';
 import type { Graphics as PIXIGraphics } from 'pixi.js';
-import * as PIXI from 'pixi.js';
 import { useGameStore } from '../store/gameStore';
 import { MAP_CONFIG } from '../constants/gameConfig';
 
 const TILE = MAP_CONFIG.TILE_SIZE;
-
-// 전체 맵 히트 영역 (이벤트 감지용)
-const MAP_HIT = new PIXI.Rectangle(0, 0, MAP_CONFIG.WIDTH * TILE, MAP_CONFIG.HEIGHT * TILE);
 
 export default function AttackRangeLayer() {
   const confirmedDest      = useGameStore(s => s.confirmedDestination);
   const selectedUnitId     = useGameStore(s => s.selectedUnitId);
   const units              = useGameStore(s => s.units);
   const attackTargetMode   = useGameStore(s => s.attackTargetMode);
-  const executeAttackOnTarget = useGameStore(s => s.executeAttackOnTarget);
 
   // 공격 범위 타일 렌더링
   const draw = useCallback((g: PIXIGraphics) => {
@@ -32,11 +24,13 @@ export default function AttackRangeLayer() {
     if (!attacker) return;
 
     const { lx: cx, ly: cy } = confirmedDest;
-    const range = attacker.attackRange;
+    // [중요] getAttackableTargets 판정과 동일하게 attackRange+1 사용
+    // → "빨간 타일 안에 있는 적 = 실제 공격 가능한 적" 보장
+    const range = attacker.attackRange + 1;
 
     for (let dx = -range; dx <= range; dx++) {
       for (let dy = -range; dy <= range; dy++) {
-        // 맨해튼 거리 필터 (십자/다이아몬드)
+        // 맨해튼 거리 필터 (getAttackableTargets와 동일 기준)
         if (Math.abs(dx) + Math.abs(dy) > range) continue;
         if (dx === 0 && dy === 0) continue;
 
@@ -68,38 +62,15 @@ export default function AttackRangeLayer() {
     }
   }, [confirmedDest, selectedUnitId, units, attackTargetMode]);
 
-  // 타겟 선택 모드에서 클릭 → 적군 확인 후 공격 실행
-  const handleClick = useCallback((e: PIXI.FederatedPointerEvent) => {
-    if (!attackTargetMode || !selectedUnitId || !confirmedDest) return;
-    const attacker = useGameStore.getState().units[selectedUnitId];
-    if (!attacker) return;
 
-    const pos = e.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
-    const lx = Math.floor(pos.x / TILE);
-    const ly = Math.floor(pos.y / TILE);
-
-    // 맨해튼 거리 내 + 적군 있는 타일인지 확인
-    const dist = Math.abs(lx - confirmedDest.lx) + Math.abs(ly - confirmedDest.ly);
-    if (dist > attacker.attackRange) return;
-
-    const targetUnit = Object.values(useGameStore.getState().units).find(
-      u => u.factionId !== attacker.factionId && u.state !== 'DEAD'
-         && u.logicalX === lx && u.logicalY === ly,
-    );
-    if (!targetUnit) return;
-
-    executeAttackOnTarget(targetUnit.id);
-  }, [attackTargetMode, selectedUnitId, confirmedDest, executeAttackOnTarget]);
-
+  // AttackRangeLayer는 시각적 범위 표시 전용.
+  // 클릭 처리는 UnitsLayer에서 스프라이트 hitbox 기반으로만 수행.
   if (!confirmedDest || !selectedUnitId) return null;
 
   return (
     <Graphics
       draw={draw}
-      eventMode={attackTargetMode ? 'static' : 'none'}
-      cursor={attackTargetMode ? 'crosshair' : 'default'}
-      hitArea={attackTargetMode ? MAP_HIT : undefined}
-      onclick={attackTargetMode ? handleClick : undefined}
+      eventMode="none"
     />
   );
 }

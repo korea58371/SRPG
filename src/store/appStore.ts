@@ -133,8 +133,15 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     const defender = provinces[defenderId];
     if (!attacker || !defender) return;
     if (attacker.owner !== PLAYER_FACTION) return;
-    // 인접 Province만 공격 가능
-    if (!attacker.adjacentIds.includes(defenderId)) return;
+    
+    // 육로 인접 혹은 해상 도항 가능(원정) 타겟인지 검증
+    const isAdjacent = attacker.adjacentIds.includes(defenderId);
+    const isNavalAdjacent = attacker.isCoastal && defender.isCoastal && (attacker.navalAdjacentIds || []).includes(defenderId);
+    
+    if (!isAdjacent && !isNavalAdjacent) {
+      console.warn('DeclareWar Rejected: 타겟 영지가 인접하지 않거나 도항할 수 없는 거리입니다.', { attackerId, defenderId });
+      return;
+    }
 
     set({
       pendingBattle: { attackerProvinceId: attackerId, defenderProvinceId: defenderId },

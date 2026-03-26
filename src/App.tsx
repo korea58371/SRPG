@@ -13,11 +13,12 @@ import AttackRangeLayer from './components/AttackRangeLayer';
 import MapObjectsLayer  from './components/MapObjectsLayer';
 import CloudShadow      from './components/CloudShadow';
 import FogLayer         from './components/FogLayer';
+import DynamicGridLayer from './components/DynamicGridLayer';
 import ActionMenu       from './components/ActionMenu';
 import FloatingDamageLayer from './components/FloatingDamageLayer';
 import UnitInfoPanel    from './components/UnitInfoPanel';
 import TurnEndPrompt    from './components/TurnEndPrompt';
-import { useGameStore } from './store/gameStore';
+import { useGameStore, getAttackableTargets } from './store/gameStore';
 import { useAppStore }  from './store/appStore';
 import { generateMapData } from './utils/mapGenerator';
 import { MAP_CONFIG, PLAYER_FACTION }   from './constants/gameConfig';
@@ -97,8 +98,15 @@ function TurnHUD() {
 
       {/* 하단 */}
       <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
-        <div className="bg-black/70 border border-gray-600 rounded-xl px-6 py-3 text-white text-sm flex items-center gap-6">
-          {confirmedDest ? (
+        <div className="bg-black/70 border border-gray-600 rounded-xl px-6 py-3 text-white text-sm flex items-center gap-6 shadow-lg">
+          {useGameStore(s => s.attackTargetMode) ? (
+            <>
+              <span className="text-red-400 font-bold animate-pulse">⚔️ 공격할 적군을 클릭하세요</span>
+              <button className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs pointer-events-auto cursor-pointer" onClick={() => useGameStore.getState().cancelConfirmedMove()}>
+                취소 [우클릭]
+              </button>
+            </>
+          ) : confirmedDest ? (
             <span className="text-yellow-300 font-bold">🎯 이동 확정 — 행동을 선택하세요 (우클릭=취소)</span>
           ) : selectedUnitId ? (
             <>
@@ -178,7 +186,11 @@ function BattleScreen() {
   }, [setBattleType, initUnits, pendingBattle, provinces]);
 
   // ─── 카메라 팬 & 줌 로직 ───
-  const [camera, setCamera] = useState({ x: window.innerWidth / 2, y: 100, scale: 1 });
+  // 화면 중앙에 전체 맵 너비(약 1920px)가 한눈에 보이도록 초기 배율 반응형 설정
+  const [camera, setCamera] = useState(() => {
+    const initialScale = Math.max(0.4, Math.min(1.2, window.innerWidth / 1920));
+    return { x: window.innerWidth / 2, y: window.innerHeight * 0.1, scale: initialScale };
+  });
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
 
@@ -230,11 +242,18 @@ function BattleScreen() {
   const rafRef = useRef<number>(0);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = true; };
-    const handleKeyUp   = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = false; };
+    const handleKeyDown = (e: KeyboardEvent) => { 
+      keys.current[e.key.toLowerCase()] = true; 
+      if (e.key === 'Control') useGameStore.getState().setCtrlPressed(true);
+    };
+    const handleKeyUp   = (e: KeyboardEvent) => { 
+      keys.current[e.key.toLowerCase()] = false; 
+      if (e.key === 'Control') useGameStore.getState().setCtrlPressed(false);
+    };
     const handleBlur    = () => {
       keys.current = {};
       isDragging.current = false;
+      useGameStore.getState().setCtrlPressed(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -335,13 +354,79 @@ function BattleScreen() {
               rotation={Math.PI / 4} 
               sortableChildren={true}
               eventMode="static"
+              onpointerdown={(e) => {
+                if (e.button === 2) return;
+                
+                const pos = e.data.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
+                const lx = Math.floor(pos.x / MAP_CONFIG.TILE_SIZE);
+                const ly = Math.floor(pos.y / MAP_CONFIG.TILE_SIZE);
+                
+                const store = useGameStore.getState();
+                const tileId = `${lx},${ly}`;
+                
+                // ─ 공격 모드: 타일 좌표로 적군 유닛 직접 탐색하여 공격 ─
+                // (UnitsLayer Sprite의 역변환 이벤트 전달 문제를 우회)
+                if (store.attackTargetMode && store.confirmedDestination && store.selectedUnitId) {
+                  const attacker = store.units[store.selectedUnitId];
+                  if (!attacker) return;
+                  const dest = store.confirmedDestination;
+                  const validTargets = getAttackableTargets(attacker, store.units, dest.lx, dest.ly);
+                  // 클릭한 타일에 유효한 공격 대상이 있는지 확인
+                  const target = validTargets.find(t => t.logicalX === lx && t.logicalY === ly);
+                  console.log(`⚔️ [공격모드클릭] (${lx},${ly}) → target=${target?.id ?? '없음'}`);
+                  if (target) {
+                    store.executeAttackOnTarget(target.id);
+                  }
+                  return;
+                }
+
+                // 이동 가능 영역 클릭 시 이동 확정
+                if (store.moveRangeTiles.has(tileId)) {
+                  store.confirmMove(lx, ly);
+                  return;
+                }
+                
+                // 클릭한 좌표에 아군 유닛이 있으면 선택
+                const clickedUnit = Object.values(store.units).find(u => u.logicalX === lx && u.logicalY === ly && u.state !== 'DEAD');
+                if (clickedUnit) {
+                  if (clickedUnit.factionId !== PLAYER_FACTION) return;
+                  
+                  // 이미 선택된 자신을 다시 클릭한 경우 (제자리 행동 처리)
+                  if (store.selectedUnitId === clickedUnit.id) {
+                    if (store.activeUnitId === clickedUnit.id) {
+                      store.confirmMove(lx, ly);
+                    }
+                    return;
+                  }
+                  
+                  // 다른 아군 유닛 선택
+                  store.selectUnit(clickedUnit.id);
+                  
+                  // 사방이 막혀서 바로 이동 불가인 경우 자동 confirmMove (사방 막힘 버그 해결)
+                  setTimeout(() => {
+                    const st = useGameStore.getState();
+                    if (st.selectedUnitId === clickedUnit.id && st.activeUnitId === clickedUnit.id && st.moveRangeTiles.size === 0) {
+                      st.confirmMove(lx, ly);
+                    }
+                  }, 0);
+                  return;
+                }
+
+                // 빈 땅 클릭 → 선택 해제
+                if (store.selectedUnitId) {
+                  store.selectUnit(null);
+                }
+              }}
+
               onpointermove={(e) => {
                 // 상단 레이어들의 간섭을 피해 가장 넓은 컨테이너에서 마우스 위치를 감지합니다.
                 const pos = e.data.getLocalPosition(e.currentTarget as PIXI.DisplayObject);
                 const lx = Math.floor(pos.x / MAP_CONFIG.TILE_SIZE);
                 const ly = Math.floor(pos.y / MAP_CONFIG.TILE_SIZE);
-                useGameStore.getState().setHoveredMapTile({ lx, ly });
-                useGameStore.getState().setHoveredMapPixel({ x: pos.x, y: pos.y });
+                const store = useGameStore.getState();
+                store.setHoveredMapTile({ lx, ly });
+                store.setHoveredMapPixel({ x: pos.x, y: pos.y });
+                store.setHoveredMoveTile({ lx, ly });
               }}
               onpointerout={() => {
                 useGameStore.getState().setHoveredMapTile(null);
@@ -351,6 +436,7 @@ function BattleScreen() {
               <TerrainMap />
               <MoveRangeLayer />
               <AttackRangeLayer />
+              <DynamicGridLayer />
               <PathLayer />
               
               {/* Entity Layout Nodes (Z-Index 기반 혼합 정렬됨) */}
@@ -358,7 +444,7 @@ function BattleScreen() {
               <UnitsLayer />
               
               <FogLayer />
-              {/* <CloudShadow /> */}
+              <CloudShadow />
             </Container>
           </Container>
         </Container>
@@ -396,7 +482,7 @@ function BattleScreen() {
       <ActionMenu camera={camera} />
       <TurnEndPrompt />
       <UnitInfoPanel />
-      <FloatingDamageLayer />
+      <FloatingDamageLayer camera={camera} />
       <CombatLog />
     </div>
   );

@@ -50,7 +50,8 @@ export interface Unit {
   maxHp: number;
   attack: number;
   defense: number;
-  speed: number;
+  speed: number;       // CT 증가 속도 (CT 시스템 전용)
+  moveSteps: number;   // 1턴에 이동 가능한 타일 수
   attackRange: number;
 
   // ─ CT(Charge Time) 이니셔티브 시스템 ─────────────────────────

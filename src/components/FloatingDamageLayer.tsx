@@ -1,8 +1,6 @@
 // J:/AI/Game/SRPG/src/components/FloatingDamageLayer.tsx
 // 전투 데미지 플로팅 텍스트 (DOM 기반, CSS 애니메이션)
-// - 1.4초 동안 위로 60px 상승 + 페이드아웃
-// - 크리티컬: 노란색, 크게 표시
-// - 일반: 흰색
+// 월드 좌표(tileToPixel) → 아이소메트릭 화면 좌표 변환 후 표시
 
 import { useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
@@ -10,7 +8,28 @@ import type { FloatingDamage } from '../store/gameStore';
 
 const DURATION_MS = 1400;
 
-function FloatingDamageItem({ dmg }: { dmg: FloatingDamage }) {
+interface Camera { x: number; y: number; scale: number }
+
+// 월드 좌표 → 화면 픽셀 좌표 변환
+// 부모 Container: x=camera.x, y=camera.y, scale=camera.scale
+// 내부 Container: scale=(1, 0.5), rotation=45° (Math.PI/4)
+function worldToScreen(wx: number, wy: number, camera: Camera): { sx: number; sy: number } {
+  const cos45 = Math.SQRT1_2; // 1 / √2
+  const sin45 = Math.SQRT1_2;
+  // rotation(45°) 적용
+  const rx = wx * cos45 - wy * sin45;
+  const ry = wx * sin45 + wy * cos45;
+  // scale(1, 0.5) 적용
+  const scx = rx;
+  const scy = ry * 0.5;
+  // camera 적용
+  return {
+    sx: scx * camera.scale + camera.x,
+    sy: scy * camera.scale + camera.y,
+  };
+}
+
+function FloatingDamageItem({ dmg, camera }: { dmg: FloatingDamage; camera: Camera }) {
   const remove = useGameStore(s => s.removeFloatingDamage);
 
   useEffect(() => {
@@ -18,13 +37,15 @@ function FloatingDamageItem({ dmg }: { dmg: FloatingDamage }) {
     return () => clearTimeout(timer);
   }, [dmg.id, remove]);
 
+  const { sx, sy } = worldToScreen(dmg.x, dmg.y, camera);
+
   return (
     <div
       key={dmg.id}
       className="absolute pointer-events-none select-none font-extrabold"
       style={{
-        left: dmg.x,
-        top: dmg.y,
+        left: sx,
+        top: sy,
         transform: 'translate(-50%, -50%)',
         fontSize: dmg.isCrit ? '22px' : '16px',
         color: dmg.isCrit ? '#ffe040' : '#ffffff',
@@ -40,7 +61,9 @@ function FloatingDamageItem({ dmg }: { dmg: FloatingDamage }) {
   );
 }
 
-export default function FloatingDamageLayer() {
+interface FloatingDamageLayerProps { camera: Camera }
+
+export default function FloatingDamageLayer({ camera }: FloatingDamageLayerProps) {
   const damages = useGameStore(s => s.floatingDamages);
 
   return (
@@ -55,7 +78,7 @@ export default function FloatingDamageLayer() {
         }
       `}</style>
       {damages.map(dmg => (
-        <FloatingDamageItem key={dmg.id} dmg={dmg} />
+        <FloatingDamageItem key={dmg.id} dmg={dmg} camera={camera} />
       ))}
     </>
   );

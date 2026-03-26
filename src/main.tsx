@@ -1,7 +1,12 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import * as PIXI from 'pixi.js'
 import './index.css'
 import App from './App.tsx'
+
+// 레트로 픽셀 아트 및 폰트 렌더링 선명도(안티앨리어싱 해제) 강제 고정
+PIXI.BaseTexture.defaultOptions.scaleMode = PIXI.SCALE_MODES.NEAREST;
+PIXI.settings.ROUND_PIXELS = true;
 
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
   constructor(props: {children: React.ReactNode}) {

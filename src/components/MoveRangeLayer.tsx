@@ -57,6 +57,7 @@ export default function MoveRangeLayer() {
   const moveRangeTiles       = useGameStore(useShallow(s => s.moveRangeTiles));
   const hoveredMoveTile      = useGameStore(s => s.hoveredMoveTile);
   const confirmedDestination = useGameStore(s => s.confirmedDestination);
+  const attackTargetMode     = useGameStore(s => s.attackTargetMode); // 공격 모드일 때 eventMode=none 전환용
   const setHoveredMoveTile   = useGameStore(s => s.setHoveredMoveTile);
   const confirmMove          = useGameStore(s => s.confirmMove);
   const units                = useGameStore(s => s.units);
@@ -71,7 +72,9 @@ export default function MoveRangeLayer() {
 
     // ─ 1단계: 공격 가능 확장 범위 (빨강) — 이동 확정 전에만 표시
     if (!confirmedDestination) {
-      const extAttack = calcExtendedAttackTiles(moveRangeTiles, attackRange);
+      // [중요] getAttackableTargets, AttackRangeLayer와 동일하게 attackRange+1 전달
+      const extAttack = calcExtendedAttackTiles(moveRangeTiles, attackRange + 1);
+
       g.beginFill(ATTACK_EXT_COLOR, ATTACK_EXT_ALPHA);
       g.lineStyle(1, ATTACK_EXT_LINE, 0.35);
       for (const key of extAttack) {
@@ -118,22 +121,43 @@ export default function MoveRangeLayer() {
     setHoveredMoveTile(null);
   }, [setHoveredMoveTile]);
 
-  const handleClick = useCallback((e: PIXI.FederatedPointerEvent) => {
+  const handlePointerDown = useCallback((e: PIXI.FederatedPointerEvent) => {
+    if (e.button === 2) return; // 우클릭 무시
+    
+    const state = useGameStore.getState();
+    
+    // 공격 모드 또는 이동 확정된 상태에서는 MoveRangeLayer가 클릭을 처리하지 않음
+    // → UnitsLayer가 공격 대상을 처리할 수 있도록 이벤트 통과
+    if (state.attackTargetMode || state.confirmedDestination) return;
+    
     const tile = getTileFromEvent(e);
-    if (tile) confirmMove(tile.lx, tile.ly);
+    if (!tile) return; // 이동 가능 타일이 아니면 이벤트를 통과시켜 UnitsLayer 등이 받도록 함
+    
+    // 이동 가능 타일 클릭 확정 → 이벤트 버블링 차단
+    e.stopPropagation();
+    confirmMove(tile.lx, tile.ly);
   }, [getTileFromEvent, confirmMove]);
 
   if (!selectedUnitId) return null;
 
+  // [핵심] 공격 모드에서만 MoveRangeLayer를 완전히 비활성화.
+  // PIXI hit test는 형제 레이어로 전파되지 않으므로,
+  // MoveRangeLayer(hitArea=전체맵)가 활성화 되어 있으면
+  // UnitsLayer의 유닛 onpointerdown이 절대 호출되지 않음.
+  // confirmedDestination 상태(이동 확정 후)는 handlePointerDown 내 return으로 처리하며,
+  // 여전히 MoveRangeLayer가 클릭을 허용해야 App.tsx의 이동확정이 작동함.
+  const isInteractive = !attackTargetMode;
+
   return (
     <Graphics
       draw={draw}
-      eventMode="static"
+      eventMode={isInteractive ? 'static' : 'none'}
       cursor="pointer"
-      hitArea={MAP_HIT_AREA}
-      onpointermove={handlePointerMove}
-      onpointerleave={handlePointerLeave}
-      onclick={handleClick}
+      hitArea={isInteractive ? MAP_HIT_AREA : null}
+      onpointermove={isInteractive ? handlePointerMove : undefined}
+      onpointerleave={isInteractive ? handlePointerLeave : undefined}
+      onpointerdown={isInteractive ? handlePointerDown : undefined}
     />
   );
 }
+
