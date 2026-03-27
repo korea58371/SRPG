@@ -8,6 +8,7 @@ import { FACTIONS, PLAYER_FACTION } from '../constants/gameConfig';
 import { Stage, Container, Graphics as PixiGraphics, Text as PixiText, Sprite, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import HeroListModal from '../components/HeroListModal';
+import DomesticModal, { type DomesticMenuType } from '../components/DomesticModal';
 
 // 지형 스프라이트 매니페스트 (public/assets/ui/terrain/ 기반)
 const TERRAIN_MANIFEST: Record<string, string[]> = {
@@ -75,6 +76,10 @@ export const StrategyMapScreen = () => {
   const endStrategyTurn   = useAppStore(s => s.endStrategyTurn);
 
   const [mapMode, setMapMode] = useState<MapMode>('faction');
+  const [activeDomesticMenu, setActiveDomesticMenu] = useState<DomesticMenuType>(null);
+
+  const openDomestic = (menu: DomesticMenuType) => setActiveDomesticMenu(menu);
+  const closeDomestic = () => setActiveDomesticMenu(null);
 
   // 화면 크기
   const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -119,6 +124,57 @@ export const StrategyMapScreen = () => {
   const pointerDownPos = useRef({ x: 0, y: 0 });
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // ─── 플레이어 영지 중심 카메라 맞춤 ───────────────────────────────────────
+  // worldSeed가 바뀔 때(새 게임) → 플레이어 소유 영지 bbox 계산 → 화면 맞춤
+  useEffect(() => {
+    if (!worldSeed || Object.keys(storeProvinces).length === 0) return;
+
+    const playerProvs = Object.values(storeProvinces).filter(
+      p => p.owner === PLAYER_FACTION
+    );
+    if (playerProvs.length === 0) return;
+
+    // 1. 영지 seedX/Y (0~1 정규화) → 실제 SVG 픽셀 좌표로 변환
+    const xs = playerProvs.map(p => p.seedX * SVG_W);
+    const ys = playerProvs.map(p => p.seedY * SVG_H);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    // 2. bbox 중심 (SVG 좌표계)
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // 3. 영지 영역 크기에 여백(padding)을 고려한 배율 계산
+    const PADDING = 80; // px (화면 여백)
+    // 영지가 밀집되어 bbox가 너무 작을 때 최소 가시 영역 보장
+    const MIN_BBOX = 200; // SVG 픽셀 기준 최소 bbox 크기
+    const bboxW = Math.max(maxX - minX + PADDING * 2, MIN_BBOX);
+    const bboxH = Math.max(maxY - minY + PADDING * 2, MIN_BBOX);
+    const scaleX = dimensions.w / bboxW;
+    const scaleY = dimensions.h / bboxH;
+
+    // 맵 전체 맞춤 최소 배율 이하로는 내려가지 않음
+    const minScale = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
+    const targetScale = Math.max(minScale, Math.min(scaleX, scaleY, 6.0));
+
+    // 4. 중심이 화면 정중앙에 오도록 position 계산
+    const rawX = dimensions.w / 2 - cx * targetScale;
+    const rawY = dimensions.h / 2 - cy * targetScale;
+
+    // 5. 맵 바깥으로 벗어나지 않도록 클램핑
+    const mapW = SVG_W * targetScale;
+    const mapH = SVG_H * targetScale;
+    const clampedX = mapW > dimensions.w ? Math.max(dimensions.w - mapW, Math.min(0, rawX)) : (dimensions.w - mapW) / 2;
+    const clampedY = mapH > dimensions.h ? Math.max(dimensions.h - mapH, Math.min(0, rawY)) : (dimensions.h - mapH) / 2;
+
+    // 6. 애니메이션 target 업데이트 → useTick Lerp가 부드럽게 이동
+    targetScaleRef.current = targetScale;
+    targetPositionRef.current = { x: clampedX, y: clampedY };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worldSeed]);
 
   // 화면 밖으로 튕겨나가지 않도록 좌표를 클램프(Clamp)하는 보조 함수
   const getClampedPosition = useCallback((newX: number, newY: number, sc: number) => {
@@ -232,7 +288,7 @@ export const StrategyMapScreen = () => {
       const mdx = e.clientX - pointerDownPos.current.x;
       const mdy = e.clientY - pointerDownPos.current.y;
       
-      if (mdx * mdx + mdy * mdy > 16) hasDragged.current = true;
+      if (mdx * mdx + mdy * mdy > 64) hasDragged.current = true; // 8px 이상 이동 시 드래그 판정
 
       // ref 기준으로 즉시 연산: React setState 비동기 지연 없음
       const dx = e.clientX - dragStartRef.current.x;
@@ -281,29 +337,45 @@ export const StrategyMapScreen = () => {
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     setIsDraggingMap(false);
     isDraggingMapRef.current = false;
-    // 드래그 종료 시 1회만 state 동기화 (지형 컸링 등 React 렌더링이 필요한 구맴의 정확한 개신 보장)
     setPosition({ x: currentPositionRef.current.x, y: currentPositionRef.current.y });
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
   // ─── 클릭 처리 (드래그와 구분) ────────────────────────────────────────────
-  // hasDragged.current가 true이면 드래그로 간주하여 클릭 무시
-  const handleCanvasClick = (_e: React.MouseEvent) => {
+  // hover state에 의존하지 않고 클릭 위치에서 직접 Delaunay로 province를 탐지
+  const handleCanvasClick = (e: React.MouseEvent) => {
     if (hasDragged.current) return;
-    if (hoveredProvinceId && hoveredProvinceId !== selectedProvinceId) {
-      selectProvince(hoveredProvinceId);
-    } else if (!hoveredProvinceId) {
-      // 빈 바다를 클릭한 경우 선택 해제
-      selectProvince(null);
-    } else if (hoveredProvinceId === selectedProvinceId) {
-      selectProvince(null);
+    if (!containerRef.current || !delaunayFinder || !parsedCells) return;
+
+    // 클릭 픽셀 → 맵 로컬 좌표 변환
+    const rect = containerRef.current.getBoundingClientRect();
+    const localX = (e.clientX - rect.left - currentPositionRef.current.x) / currentScaleRef.current;
+    const localY = (e.clientY - rect.top - currentPositionRef.current.y) / currentScaleRef.current;
+
+    const cellIndex = delaunayFinder.find(localX, localY);
+    let clickedProvId: string | null = null;
+    if (cellIndex !== undefined && cellIndex >= 0 && cellIndex < parsedCells.length) {
+      const pCell = parsedCells[cellIndex];
+      const dx = pCell.cx - localX;
+      const dy = pCell.cy - localY;
+      if (dx * dx + dy * dy <= 4000 && pCell.provinceId) {
+        clickedProvId = pCell.provinceId;
+      }
+    }
+
+    if (clickedProvId && clickedProvId !== selectedProvinceId) {
+      selectProvince(clickedProvId);
+    } else if (clickedProvId && clickedProvId === selectedProvinceId) {
+      selectProvince(null); // 같은 영지 재클릭 시 선택 해제
+    } else {
+      selectProvince(null); // 바다/빈 영역 클릭
     }
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (hasDragged.current) return;
-    selectProvince(null); // 우클릭 시 무조건 선택 해제
+    selectProvince(null);
   };
 
 
@@ -613,38 +685,68 @@ export const StrategyMapScreen = () => {
       }
     }
 
-    const darkenColor = (color: number) => {
-      const r = Math.floor(((color >> 16) & 0xff) * 0.25);
-      const g = Math.floor(((color >> 8) & 0xff) * 0.25);
-      const b = Math.floor((color & 0xff) * 0.25);
-      return (r << 16) | (g << 8) | b;
+    // 헥스 색상 분리 유틸
+    const ch = (c: number) => ({ r: (c >> 16) & 0xff, g: (c >> 8) & 0xff, b: c & 0xff });
+    const mc = (r: number, g: number, b: number) => (r << 16) | (g << 8) | b;
+
+    // 채도 감소: 원색과 회색(평균) 사이를 satFactor 비율로 혼합 (0=완전 회색, 1=원색)
+    const desaturate = (c: { r: number, g: number, b: number }, satFactor: number) => {
+      const gray = (c.r * 0.299 + c.g * 0.587 + c.b * 0.114); // 지각 밝기 기반 회색
+      return {
+        r: gray + (c.r - gray) * satFactor,
+        g: gray + (c.g - gray) * satFactor,
+        b: gray + (c.b - gray) * satFactor,
+      };
     };
 
-    // 1-1. 일반 영지 경계선
+    // 두 세력 색상을 혼합 → 채도 낮춤 → 어둡게
+    const makeBorderColor = (colorA: number, colorB: number, darken: number, satFactor = 0.35) => {
+      const a = ch(colorA), b = ch(colorB);
+      const mixed = { r: (a.r + b.r) / 2, g: (a.g + b.g) / 2, b: (a.b + b.b) / 2 };
+      const desat = desaturate(mixed, satFactor);
+      const r = Math.floor(desat.r * darken);
+      const gv = Math.floor(desat.g * darken);
+      const bl = Math.floor(desat.b * darken);
+      return mc(r, gv, bl);
+    };
+
+    // Province → 세력 색상 조회
+    const getFactionColor = (provId: string | undefined): number => {
+      if (!provId) return 0x888888;
+      const prov = activeProvinces[provId];
+      return prov ? (FACTIONS[prov.owner]?.color ?? 0x888888) : 0x888888;
+    };
+
+    const dimFactor = 0.25; // 딤 처리 시 밝기
+
+
+    // 1-1. 일반 영지 경계선 (같은 세력 내 영지 간)
     boundaryEdges.forEach(e => {
       if (e.isFactionBoundary) return;
-      let color = 0x5a4a40;
-      if (isPlayerSelected && !interactableSet.has(e.provIdA || '') && !interactableSet.has(e.provIdB || '')) {
-        color = darkenColor(color);
-      }
+      const isDimmed = isPlayerSelected
+        && !interactableSet.has(e.provIdA || '')
+        && !interactableSet.has(e.provIdB || '');
+      const darken = isDimmed ? dimFactor * 0.4 : 0.63; // 영지 경계 (50% 연하게)
+      const color = makeBorderColor(getFactionColor(e.provIdA ?? undefined), getFactionColor(e.provIdB ?? undefined), darken);
       g.lineStyle({ width: 1.0, color, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       g.moveTo(e.pts[0], e.pts[1]);
       for (let i = 2; i < e.pts.length; i += 2) g.lineTo(e.pts[i], e.pts[i + 1]);
     });
 
-    // 1-2. 세력 경계선
+    // 1-2. 세력 경계선 (다른 세력 간—더 어둡고 두껍게)
     boundaryEdges.forEach(e => {
       if (!e.isFactionBoundary) return;
-      let color = 0x4a3b32;
-      if (isPlayerSelected && !interactableSet.has(e.provIdA || '') && !interactableSet.has(e.provIdB || '')) {
-        color = darkenColor(color);
-      }
-      g.lineStyle({ width: 1.2, color, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
+      const isDimmed = isPlayerSelected
+        && !interactableSet.has(e.provIdA || '')
+        && !interactableSet.has(e.provIdB || '');
+      const darken = isDimmed ? dimFactor * 0.3 : 0.42; // 세력 경계 (50% 연하게)
+      const color = makeBorderColor(getFactionColor(e.provIdA ?? undefined), getFactionColor(e.provIdB ?? undefined), darken);
+      g.lineStyle({ width: 2.0, color, alpha: 1.0, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
       g.moveTo(e.pts[0], e.pts[1]);
       for (let i = 2; i < e.pts.length; i += 2) g.lineTo(e.pts[i], e.pts[i + 1]);
     });
 
-    // 1-3. 대륙 해안선 (바다 경계라 항상 밝음 유지 가능, 필요시 동일 적용)
+    // 1-3. 대륙 해안선
     g.lineStyle({ width: 1.5, color: 0x3d3027, alpha: 1.0, alignment: 0.5, join: PIXI.LINE_JOIN.ROUND, cap: PIXI.LINE_CAP.ROUND });
     for (let i = 0; i < coastlineEdges.length; i++) {
         const edge = coastlineEdges[i];
@@ -1192,25 +1294,51 @@ export const StrategyMapScreen = () => {
         </div>
       )}
 
-      {/* 우측 하단 턴 종료 및 인물록 버튼 그룹 */}
-      <div className="absolute bottom-6 right-6 flex items-center gap-3 z-30 pointer-events-auto">
-        <button
-          onClick={(e: React.MouseEvent) => { e.stopPropagation(); useGameStore.getState().setHeroListModalOpen(true); }}
-          className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold border-2 border-slate-500 shadow-xl smap-btn-anim transition-all flex items-center gap-2"
-        >
-          <span className="text-lg">📜</span> 인물록
-        </button>
+      {/* 하단 전체 UI 바 */}
+      <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-none">
+        <div className="flex items-end justify-between px-6 pb-6">
 
-        <button
-          onClick={(e) => { e.stopPropagation(); endStrategyTurn(); }}
-          className="px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white rounded font-bold border-2 border-amber-500 shadow-xl smap-btn-anim transition-all"
-        >
-          ⏭ 턴 종료 <span className="ml-1 text-amber-200 opacity-80">({strategyTurn})</span>
-        </button>
+          {/* 좌측: 전체 내정 메뉴 버튼 그룹 */}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <span className="text-xs text-slate-500 font-bold tracking-widest mr-1">전체 내정</span>
+            {([
+              { menu: 'recruit'   as DomesticMenuType, icon: '🧑‍💼', label: '인재 등용', color: 'bg-amber-800 hover:bg-amber-700 border-amber-600' },
+              { menu: 'conscript' as DomesticMenuType, icon: '📯',   label: '징병',     color: 'bg-blue-800 hover:bg-blue-700 border-blue-600' },
+              { menu: 'formation' as DomesticMenuType, icon: '⚙️',   label: '군단 편제', color: 'bg-sky-800 hover:bg-sky-700 border-sky-600' },
+              { menu: 'personnel' as DomesticMenuType, icon: '🏛️',  label: '인사',     color: 'bg-violet-800 hover:bg-violet-700 border-violet-600' },
+            ] as const).map(({ menu, icon, label, color }) => (
+              <button
+                key={menu}
+                onClick={(e) => { e.stopPropagation(); openDomestic(menu); }}
+                className={`px-4 py-2.5 ${color} text-white rounded font-bold border shadow-xl smap-btn-anim transition-all flex items-center gap-1.5 text-sm`}
+              >
+                <span>{icon}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* 우측: 인물록 + 턴 종료 */}
+          <div className="flex items-center gap-3 pointer-events-auto">
+            <button
+              onClick={(e: React.MouseEvent) => { e.stopPropagation(); useGameStore.getState().setHeroListModalOpen(true); }}
+              className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold border-2 border-slate-500 shadow-xl smap-btn-anim transition-all flex items-center gap-2"
+            >
+              <span className="text-lg">📜</span> 인물록
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); endStrategyTurn(); }}
+              className="px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white rounded font-bold border-2 border-amber-500 shadow-xl smap-btn-anim transition-all"
+            >
+              ⏭ 턴 종료 <span className="ml-1 text-amber-200 opacity-80">({strategyTurn})</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* 모달 */}
       <HeroListModal />
+      <DomesticModal menu={activeDomesticMenu} onClose={closeDomestic} />
 
     </div>
   );

@@ -1,62 +1,55 @@
-import type { Province, GlobalHero, FactionResource } from '../types/appTypes';
+// J:/AI/Game/SRPG/src/utils/domesticLogic.ts
+// [수정] GlobalHero 제거 — Character 타입으로 교체, calcHeroPassive() 연동
+
+import type { Province, FactionResource } from '../types/appTypes';
+import type { Character } from '../types/characterTypes';
+import { calcHeroPassive } from './heroPassiveCalc';
 
 export interface ProvinceYield {
   gold: number;
   food: number;
   recruitment: number;
   securityDelta: number;
-  foodConsumption: number; // 주둔 영웅들로 인한 추가 식량 소모 (옵션)
+  foodConsumption: number;
 }
 
 /**
- * 특정 영지(Province)의 턴당 예상 산출량을 계산합니다.
- * @param province 계산할 영지
- * @param stationedHeroes 영지에 주둔 중인 장수 목록
- * @returns 턴당 예상 산출량 객체
+ * 특정 영지의 턴당 예상 산출량을 계산합니다.
+ * 장수 패시브는 calcHeroPassive()를 통해 Character.baseStats에서 동적 계산됩니다.
  */
-export function calculateProvinceYield(province: Province, stationedHeroes: GlobalHero[]): ProvinceYield {
+export function calculateProvinceYield(province: Province, stationedChars: Character[]): ProvinceYield {
   let totalRecruitmentBonus = 0;
   let totalProductionBonus = 0;
   let totalSecurityDelta = 0;
-  let maxFoodConsumptionMultiplier = 1.0;
+  let totalFoodConsumptionMultiplierDelta = 0;
 
-  for (const hero of stationedHeroes) {
-    const { raceEffects, classEffects } = hero;
-    
-    // 모병량 보너스 합산
-    totalRecruitmentBonus += (raceEffects?.recruitmentBonus || 0) + (classEffects?.recruitmentBonus || 0);
-    
-    // 생산량 보너스 합산
-    totalProductionBonus += (raceEffects?.productionBonus || 0) + (classEffects?.productionBonus || 0);
-    
-    // 치안 보너스 합산
-    totalSecurityDelta += (raceEffects?.securityBonus || 0) + (classEffects?.securityBonus || 0);
-    
-    // 식량 소모 배율 합산 (기본 계수 1.0에서 초과/미달분 합산)
-    const raceFoodMult = raceEffects?.foodConsumptionMultiplier ?? 1.0;
-    const classFoodMult = classEffects?.foodConsumptionMultiplier ?? 1.0;
-    maxFoodConsumptionMultiplier += (raceFoodMult - 1.0) + (classFoodMult - 1.0);
+  for (const char of stationedChars) {
+    const passive = calcHeroPassive(char);
+
+    totalRecruitmentBonus   += passive.recruitmentBonus;
+    totalProductionBonus    += passive.productionBonus;
+    totalSecurityDelta      += passive.securityBonus;
+    // 식량 소모 배율: 기본값 1.0에서 초과분 합산
+    totalFoodConsumptionMultiplierDelta += (passive.foodConsumptionMultiplier - 1.0);
   }
 
-  // 곱연산은 하한선 0을 둡니다 (역생산 방지)
-  const recruitmentMultiplier = Math.max(0, 1 + totalRecruitmentBonus / 100);
-  const productionMultiplier  = Math.max(0, 1 + totalProductionBonus / 100);
-  const foodConsumpMultiplier = Math.max(0, maxFoodConsumptionMultiplier);
+  const recruitmentMultiplier  = Math.max(0, 1 + totalRecruitmentBonus / 100);
+  const productionMultiplier   = Math.max(0, 1 + totalProductionBonus / 100);
+  const foodConsumpMultiplier  = Math.max(0, 1.0 + totalFoodConsumptionMultiplierDelta);
 
-  // 최종 산출량 계산 (치안이 낮으면 생산량에 패널티 부여 가능 - 예: 치안 50 이하면 생산량 감소)
+  // 치안이 낮으면 생산량에 패널티 (치안 50 이하 → 감소)
   const securityPenalty = province.security < 50 ? (province.security / 50) : 1.0;
 
-  const gold = Math.floor(province.baseGoldProduction * productionMultiplier * securityPenalty);
-  const food = Math.floor(province.baseFoodProduction * productionMultiplier * securityPenalty);
+  const gold        = Math.floor(province.baseGoldProduction * productionMultiplier * securityPenalty);
+  const food        = Math.floor(province.baseFoodProduction * productionMultiplier * securityPenalty);
   const recruitment = Math.floor(province.baseRecruitment * recruitmentMultiplier * securityPenalty);
 
-  return {
-    gold,
-    food,
-    recruitment,
-    securityDelta: totalSecurityDelta,
-    foodConsumption: Math.floor(5 * foodConsumpMultiplier) * stationedHeroes.length, // 장수 1명당 기본 5의 식량 소모로 가정
-  };
+  // 식량 소모: 장수 1명당 기본 5 + 편제 병력 기반 추가 소모
+  const baseFoodCost = 5 * stationedChars.length;
+  const troopFoodCost = stationedChars.reduce((sum, c) => sum + Math.floor(c.troopCount * 0.01), 0);
+  const foodConsumption = Math.floor((baseFoodCost + troopFoodCost) * foodConsumpMultiplier);
+
+  return { gold, food, recruitment, securityDelta: totalSecurityDelta, foodConsumption };
 }
 
 /**
@@ -65,39 +58,36 @@ export function calculateProvinceYield(province: Province, stationedHeroes: Glob
 export function processDomesticTurn(
   factionId: string,
   provinces: Record<string, Province>,
-  globalHeroes: Record<string, GlobalHero>,
+  characters: Record<string, Character>,
   currentResources: FactionResource
 ): { newProvinces: Record<string, Province>, newResources: FactionResource } {
-  
-  let newGold = currentResources.gold;
-  let newFood = currentResources.food;
+
+  let newGold     = currentResources.gold;
+  let newFood     = currentResources.food;
   let newManpower = currentResources.manpower;
 
   const newProvinces = { ...provinces };
 
   const myProvinces = Object.values(provinces).filter(p => p.owner === factionId);
-  const myHeroes = Object.values(globalHeroes).filter(h => h.factionId === factionId);
+  // Factioned 상태이며 해당 팩션 소속인 영웅만 적용
+  const myChars = Object.values(characters).filter(
+    c => c.factionId === factionId && c.state === 'Factioned'
+  );
 
   for (const province of myProvinces) {
-    const stationedHeroes = myHeroes.filter(h => h.locationProvinceId === province.id);
-    const yields = calculateProvinceYield(province, stationedHeroes);
+    const stationedChars = myChars.filter(c => c.locationProvinceId === province.id);
+    const yields = calculateProvinceYield(province, stationedChars);
 
-    // 자원 합산
-    newGold += yields.gold;
-    newFood += yields.food - yields.foodConsumption;
+    newGold     += yields.gold;
+    newFood     += yields.food - yields.foodConsumption;
     newManpower += yields.recruitment;
 
-    // 영지 치안 업데이트 (0 ~ 100 제한)
     const newSecurity = Math.max(0, Math.min(100, province.security + yields.securityDelta));
-    
-    newProvinces[province.id] = {
-      ...province,
-      security: newSecurity
-    };
+    newProvinces[province.id] = { ...province, security: newSecurity };
   }
 
   return {
     newProvinces,
-    newResources: { gold: newGold, food: newFood, manpower: newManpower }
+    newResources: { gold: newGold, food: newFood, manpower: newManpower },
   };
 }

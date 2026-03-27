@@ -1,36 +1,115 @@
 // J:/AI/Game/SRPG/src/store/appStore.ts
-// 전략 레이어 최상위 상태 관리 (화면 전환 + 영토 + 외교)
+// 전략 레이어 최상위 상태 관리 (화면 전환 + 영토 + 외교 + 캐릭터)
 // gameStore(전투 전용)와 완전 분리
+// [통합] GlobalHero 제거 — Character가 단일 진실 공급원
 
 import { create } from 'zustand';
 import type {
-  StrategyState, AppScreen, BattleOutcome, DiplomacyRel, FactionResource, GlobalHero
+  StrategyState, AppScreen, BattleOutcome, DiplomacyRel, FactionResource
 } from '../types/appTypes';
 import type { FactionId } from '../types/gameTypes';
+import type { Character } from '../types/characterTypes';
 import { generateProvinces } from '../utils/provinceGenerator';
 import { PLAYER_FACTION, FACTIONS } from '../constants/gameConfig';
 import { processDomesticTurn } from '../utils/domesticLogic';
 
-const WIN_RATIO = 0.7; // 70% 점령 시 굿엔딩
+const WIN_RATIO = 0.7;
 
 function checkVictory(provinces: StrategyState['provinces']): 'good' | 'bad' | null {
   const all = Object.values(provinces);
   const playerOwned = all.filter(p => p.owner === PLAYER_FACTION).length;
   const playerCapital = all.find(p => p.isCapital && p.owner === PLAYER_FACTION);
-
-  // 1. 플레이어 본거지 함락 시 즉시 배드엔딩
   if (!playerCapital) return 'bad';
-
-  // 2. 다른 모든 세력이 멸망했거나(플레이어가 100% 점령) 목표치 달성 시 굿엔딩
   if (playerOwned >= Math.ceil(all.length * WIN_RATIO)) return 'good';
-  
   return null;
 }
+
+// ─ 초기 캐릭터 풀 ────────────────────────────────────────────────────────────
+// 추후 외부 JSON으로 이관 예정. 현재는 인라인 정의.
+const INITIAL_CHARACTERS: Record<string, Character> = {
+  'hero_001': {
+    id: 'hero_001',
+    name: '아르토리우스',
+    factionId: PLAYER_FACTION,
+    state: 'Factioned',
+    locationProvinceId: null, // startGame()에서 수도 ID로 설정됨
+    birthYear: 1980, lifespan: 80, lifespanBonus: 0,
+    loyalty: 100,
+    relationships: { 'hero_002': 50 },
+    baseStats: { hp: 100, strength: 80, intelligence: 40, politics: 50, charisma: 90, speed: 12 },
+    traits: [], equipment: [],
+    skills: ['slash'],
+    troopType: 'INFANTRY',
+    troopCount: 500,
+  },
+  'hero_002': {
+    id: 'hero_002',
+    name: '베네딕트',
+    factionId: PLAYER_FACTION,
+    state: 'Factioned',
+    locationProvinceId: null,
+    birthYear: 1985, lifespan: 60, lifespanBonus: 5,
+    loyalty: 85,
+    relationships: { 'hero_001': 50 },
+    baseStats: { hp: 70, strength: 30, intelligence: 95, politics: 80, charisma: 70, speed: 8 },
+    traits: [], equipment: [],
+    skills: ['heal'],
+    troopType: 'ARCHER',
+    troopCount: 300,
+  },
+  // 재야 인재 풀 (FreeAgent — 인재 등용으로 획득 가능)
+  'hero_003': {
+    id: 'hero_003',
+    name: '가브리엘 바르트',
+    factionId: null,
+    state: 'FreeAgent',
+    locationProvinceId: null,
+    birthYear: 1978, lifespan: 70, lifespanBonus: 0,
+    loyalty: 0,
+    relationships: {},
+    baseStats: { hp: 90, strength: 70, intelligence: 60, politics: 40, charisma: 75, speed: 10 },
+    traits: [], equipment: [],
+    skills: ['cleave'],
+    troopType: 'CAVALRY',
+    troopCount: 0,
+  },
+  'hero_004': {
+    id: 'hero_004',
+    name: '이리나 솔렌',
+    factionId: null,
+    state: 'FreeAgent',
+    locationProvinceId: null,
+    birthYear: 1990, lifespan: 65, lifespanBonus: 0,
+    loyalty: 0,
+    relationships: {},
+    baseStats: { hp: 65, strength: 25, intelligence: 100, politics: 75, charisma: 60, speed: 9 },
+    traits: [], equipment: [],
+    skills: ['heal'],
+    troopType: null,
+    troopCount: 0,
+  },
+  // 적 세력 영웅 (적 세력 소속)
+  'hero_101': {
+    id: 'hero_101',
+    name: '적장 레드워드',
+    factionId: 'faction_02',
+    state: 'Factioned',
+    locationProvinceId: null,
+    birthYear: 1975, lifespan: 50, lifespanBonus: 0,
+    loyalty: 100,
+    relationships: {},
+    baseStats: { hp: 120, strength: 85, intelligence: 20, politics: 30, charisma: 50, speed: 10 },
+    traits: [], equipment: [],
+    skills: ['cleave'],
+    troopType: 'SPEARMAN',
+    troopCount: 400,
+  },
+};
 
 export const useAppStore = create<StrategyState>((set, get) => ({
   screen: 'TITLE',
   provinces: {},
-  globalHeroes: {},
+  characters: INITIAL_CHARACTERS,
   factionResources: {},
   strategyTurn: 1,
   selectedProvinceId: null,
@@ -51,40 +130,28 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     const { provinces } = generateProvinces(1440, 820, seed);
     const diplomacyRelations: Record<string, DiplomacyRel> = {};
     const factionResources: Record<FactionId, FactionResource> = {};
-    
-    // 모든 타 세력과의 기본 관계를 'war' 로 설정 (군웅할거 시대) 및 기본 자원 할당
+
     Object.keys(FACTIONS).forEach(fId => {
       if (fId !== PLAYER_FACTION) diplomacyRelations[fId] = 'war';
       factionResources[fId] = { gold: 1000, food: 2000, manpower: 500 };
     });
 
-    const globalHeroes: Record<string, GlobalHero> = {};
+    // 플레이어 수도 찾아 소속 영웅들 배치
     const playerCapital = Object.values(provinces).find(p => p.owner === PLAYER_FACTION && p.isCapital);
-    
-    // 테스트용 초기 영웅 추가
+    const updatedChars = { ...get().characters };
+
     if (playerCapital) {
-      globalHeroes['hero-orc'] = {
-        id: 'hero-orc',
-        name: '오크 대족장',
-        factionId: PLAYER_FACTION,
-        locationProvinceId: playerCapital.id,
-        raceEffects: { recruitmentBonus: 30, foodConsumptionMultiplier: 1.5, securityBonus: -10, productionBonus: 0 },
-        classEffects: { recruitmentBonus: 10, foodConsumptionMultiplier: 1.0, securityBonus: -5, productionBonus: -5 }
-      };
-      globalHeroes['hero-elf'] = {
-        id: 'hero-elf',
-        name: '엘프 대마법사',
-        factionId: PLAYER_FACTION,
-        locationProvinceId: playerCapital.id,
-        raceEffects: { recruitmentBonus: -10, foodConsumptionMultiplier: 0.8, securityBonus: 20, productionBonus: 15 },
-        classEffects: { recruitmentBonus: 0, foodConsumptionMultiplier: 1.0, securityBonus: 5, productionBonus: 20 }
-      };
+      Object.values(updatedChars).forEach(char => {
+        if (char.factionId === PLAYER_FACTION && char.state === 'Factioned') {
+          updatedChars[char.id] = { ...char, locationProvinceId: playerCapital.id };
+        }
+      });
     }
 
     set({
       screen: 'STRATEGY_MAP',
       provinces,
-      globalHeroes,
+      characters: updatedChars,
       factionResources,
       strategyTurn: 1,
       selectedProvinceId: null,
@@ -107,23 +174,17 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     set({
       provinces: {
         ...provinces,
-        [provinceId]: {
-          ...p,
-          food: p.food + 10,
-          gold: p.gold + 8,
-        },
+        [provinceId]: { ...p, food: p.food + 10, gold: p.gold + 8 },
       },
     });
   },
 
-  // ─── 외교 (중립 → 동맹 시도) ─────────────────────────────────────────────
+  // ─── 외교 ─────────────────────────────────────────────────────────────────
   executeDiplomacy: (targetFactionId) => {
     const { diplomacyRelations } = get();
     const current = diplomacyRelations[targetFactionId] ?? 'neutral';
-    if (current !== 'neutral') return; // 전쟁 or 이미 동맹이면 불가
-    set({
-      diplomacyRelations: { ...diplomacyRelations, [targetFactionId]: 'ally' },
-    });
+    if (current !== 'neutral') return;
+    set({ diplomacyRelations: { ...diplomacyRelations, [targetFactionId]: 'ally' } });
   },
 
   // ─── 전쟁 선언 → 전투 화면으로 ─────────────────────────────────────────
@@ -133,13 +194,13 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     const defender = provinces[defenderId];
     if (!attacker || !defender) return;
     if (attacker.owner !== PLAYER_FACTION) return;
-    
-    // 육로 인접 혹은 해상 도항 가능(원정) 타겟인지 검증
+
     const isAdjacent = attacker.adjacentIds.includes(defenderId);
-    const isNavalAdjacent = attacker.isCoastal && defender.isCoastal && (attacker.navalAdjacentIds || []).includes(defenderId);
-    
+    const isNavalAdjacent = attacker.isCoastal && defender.isCoastal &&
+      (attacker.navalAdjacentIds || []).includes(defenderId);
+
     if (!isAdjacent && !isNavalAdjacent) {
-      console.warn('DeclareWar Rejected: 타겟 영지가 인접하지 않거나 도항할 수 없는 거리입니다.', { attackerId, defenderId });
+      console.warn('DeclareWar Rejected: 인접하지 않거나 도항 불가 거리.', { attackerId, defenderId });
       return;
     }
 
@@ -160,21 +221,12 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     if (outcome === 'player_win') {
       const defender = newProvinces[defenderProvinceId];
       if (defender) {
-        newProvinces = {
-          ...newProvinces,
-          [defenderProvinceId]: { ...defender, owner: PLAYER_FACTION },
-        };
+        newProvinces = { ...newProvinces, [defenderProvinceId]: { ...defender, owner: PLAYER_FACTION } };
       }
     }
 
-    // [BUG FIX] 치트 모드이거나 영토 데이터가 전혀 없는 경우, checkVictory 연산을 건너뛰어 배드엔딩 오작동을 방지
     if (pendingBattle.isCheat || Object.keys(newProvinces).length === 0) {
-      set({
-        pendingBattle: null,
-        lastBattleOutcome: outcome,
-        screen: 'BATTLE_RESULT',
-        endingType: null,
-      });
+      set({ pendingBattle: null, lastBattleOutcome: outcome, screen: 'BATTLE_RESULT', endingType: null });
       return;
     }
 
@@ -190,48 +242,34 @@ export const useAppStore = create<StrategyState>((set, get) => ({
 
   // ─── 전략 턴 종료 ────────────────────────────────────────────────────────
   endStrategyTurn: () => {
-    const { strategyTurn } = get();
-    // 적 AI: 군웅할거 난전 시뮬레이션
-    const { provinces, diplomacyRelations, globalHeroes, factionResources } = get();
+    const { strategyTurn, provinces, diplomacyRelations, characters, factionResources } = get();
     let newProvinces = { ...provinces };
     let newFactionResources = { ...factionResources };
     const allFactions = Object.keys(FACTIONS);
 
-    // 1. AI 세력들의 행동 (영토 확장 등)
+    // 1. AI 세력 행동
     const enemyFactions = allFactions.filter(f => f !== PLAYER_FACTION);
     enemyFactions.forEach(fId => {
       if (Math.random() > 0.3) return;
-
       const myProvs = Object.values(newProvinces).filter(p => p.owner === fId);
-      if (myProvs.length === 0) return; // 멸망한 세력
-
+      if (myProvs.length === 0) return;
       let target = null;
       for (const myP of myProvs) {
         const adjs = myP.adjacentIds.map(id => newProvinces[id]);
         target = adjs.find(p => p.owner !== fId && p.owner !== PLAYER_FACTION);
         if (target) break;
       }
-      
       if (target) {
-        newProvinces = {
-          ...newProvinces,
-          [target.id]: { ...target, owner: fId },
-        };
+        newProvinces = { ...newProvinces, [target.id]: { ...target, owner: fId } };
       }
     });
 
-    // 2. 모든 세력의 내정 턴 결산 (생산 산출량 합산 및 치안 변동)
+    // 2. 모든 세력 내정 턴 결산 (Character 기반으로 패시브 계산)
     allFactions.forEach(fId => {
-      // 해당 팩션의 자원이 아직 초기화되지 않았다면 패스 (혹은 기본값)
       if (!newFactionResources[fId]) return;
-      
       const { newProvinces: domProvinces, newResources } = processDomesticTurn(
-        fId,
-        newProvinces,
-        globalHeroes,
-        newFactionResources[fId]
+        fId, newProvinces, characters, newFactionResources[fId]
       );
-      
       newProvinces = domProvinces;
       newFactionResources[fId] = newResources;
     });
@@ -251,7 +289,7 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   resetGame: () => set({
     screen: 'TITLE',
     provinces: {},
-    globalHeroes: {},
+    characters: INITIAL_CHARACTERS,
     factionResources: {},
     strategyTurn: 1,
     selectedProvinceId: null,
@@ -261,4 +299,54 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     endingType: null,
     worldSeed: 0,
   }),
+
+  // ─── Character 관련 Actions ───────────────────────────────────────────────
+  addCharacter: (char: Character) => set(s => ({
+    characters: { ...s.characters, [char.id]: char },
+  })),
+
+  // 인재 등용: FreeAgent → Factioned, 세력 및 배속 영지 설정
+  recruitCharacter: (charId, targetFactionId, locationProvinceId) => {
+    const { characters } = get();
+    const char = characters[charId];
+    if (!char || char.state !== 'FreeAgent') return;
+    set({
+      characters: {
+        ...characters,
+        [charId]: {
+          ...char,
+          state: 'Factioned',
+          factionId: targetFactionId,
+          locationProvinceId,
+          loyalty: 60, // 초기 충성도
+        },
+      },
+    });
+  },
+
+  // 부대 편제 변경 (군단 편제 메뉴)
+  updateCharacterTroop: (charId, troopType, troopCount) => {
+    const { characters } = get();
+    const char = characters[charId];
+    if (!char) return;
+    set({
+      characters: {
+        ...characters,
+        [charId]: { ...char, troopType, troopCount },
+      },
+    });
+  },
+
+  // 영지 간 이동 (인사 메뉴)
+  moveCharacter: (charId, provinceId) => {
+    const { characters } = get();
+    const char = characters[charId];
+    if (!char) return;
+    set({
+      characters: {
+        ...characters,
+        [charId]: { ...char, locationProvinceId: provinceId },
+      },
+    });
+  },
 }));

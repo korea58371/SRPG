@@ -1,5 +1,7 @@
 // J:/AI/Game/SRPG/src/store/gameStore.ts
-// CT(Charge Time) 기반 이니셔티브 턴제 + 장수(General) 시스템
+// CT(Charge Time) 기반 이니셔티브 턴제 + 전투 전용 스토어
+// [수정] characterSlice 제거 — characters는 appStore로 이관됨
+
 import { create } from 'zustand';
 import type { Unit } from '../types/gameTypes';
 import { MAP_CONFIG } from '../constants/gameConfig';
@@ -9,9 +11,9 @@ import { createGameStateSlice } from './slices/gameStateSlice';
 import { createTurnSystemSlice } from './slices/turnSystemSlice';
 import { createInteractionSlice } from './slices/interactionSlice';
 import { createCampaignSlice } from './slices/campaignSlice';
-import { createCharacterSlice } from './slices/characterSlice';
 
 export * from './slices/storeTypes';
+
 // ─── 유틸리티 함수들 (스토어 밖에서 사용됨) ──────────────────────────────────
 export const manhattan = (ax: number, ay: number, bx: number, by: number): number =>
   Math.abs(ax - bx) + Math.abs(ay - by);
@@ -74,5 +76,5 @@ export const useGameStore = create<RootState>((...a) => ({
   ...createTurnSystemSlice(...a),
   ...createInteractionSlice(...a),
   ...createCampaignSlice(...a),
-  ...createCharacterSlice(...a),
+  // createCharacterSlice 제거 — characters는 appStore.characters로 이관
 }));

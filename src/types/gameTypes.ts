@@ -124,6 +124,7 @@ export interface Unit {
   movePath: TilePos[];
 
   isHero: boolean;
+  characterId?: string;  // 연결된 Character ID (포트레이트 조회용)
 
   // ─ 장수(General) 전용 능력치 (unitType === 'GENERAL' 일 때만 유효) ──
   generalStrength?: number;     // 武力: 지휘 범위 내 병종 공격 +

@@ -9,6 +9,8 @@ html, body, #root {
   overflow: hidden;
   background-color: #0a0a14;
   font-family: 'Noto Sans KR', sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* 레트로 픽셀 아트 선명도 보존 */

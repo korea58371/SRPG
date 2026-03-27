@@ -1,6 +1,15 @@
 // J:/AI/Game/SRPG/src/components/UnitsLayer.tsx
-// 병종 아이콘을 오버레이한 유닛 레이어
-// Container (animation) → Sprite (색상 배경) + Sprite (병종 이모지 아이콘)
+// 유닛 토큰 UI - 개선된 버전
+//
+// 구조:
+//   ┌─────────────────────────────────┐
+//   │[순서번호]  ← 전체 유닛 / 뒤로 갈수록 투명 │
+//   │     ▼     ← isActive 인디케이터             │
+//   │  ┌──────┐ ← 마름모 포트레이트 프레임         │
+//   │[🗡]     │   + 세력 컬러 테두리               │
+//   │  └──────┘                                 │
+//   │  [HP 눈금바] ← 1눈금=1만 병력, LoL 스타일  │
+//   └─────────────────────────────────┘
 //
 // 이동 상태별 처리:
 //   IDLE     → container.x/y = unit.x/y (고정)
@@ -8,34 +17,115 @@
 //   ATTACKING→ targetX/Y 향해 빠른 보간 (bump 연출)
 //   DEAD     → 미렌더링
 
-import { useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Container, Sprite, Text, Graphics, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { useShallow } from 'zustand/react/shallow';
 import { MAP_CONFIG, FACTIONS, PLAYER_FACTION, UNIT_RESISTANCES } from '../constants/gameConfig';
 import { useGameStore, tileToPixel, getAttackableTargets } from '../store/gameStore';
-import { getUnitTypeTexture } from '../utils/unitTextures';
+import { getUnitTypeTexture, getPortraitFallbackTexture } from '../utils/unitTextures';
+import { getCharacterImageUrl } from '../utils/characterAssets';
 import { getTurnOrder } from '../store/slices/turnSystemSlice';
 import { MOCK_SKILLS, getAoETiles, getManhattanDist } from '../utils/skillTargeting';
 import { getEffectiveStat } from '../engine/statEngine';
 
 const MOVE_SPEED = 6;
-// W, H 변수는 더 이상 단위 픽셀 계산에 직접 쓰지 않으므로 주석 처리
-// const W = UNIT_CONFIG.SIZE_NORMAL.width;
-// const H = UNIT_CONFIG.SIZE_NORMAL.height;
 
+// ─── 레이아웃 상수 ────────────────────────────────────────────────────────
+// 아이소메트릭 역변환 컨테이너(rotation=-45°, scaleX=0.5) 안에서 렌더링.
+// 로지컬 좌표의 W×H 직사각형 → 화면에서 마름모로 자동 변환됨.
+const TOKEN_W = MAP_CONFIG.TILE_SIZE * 0.85; // 토큰 가로 (로지컬)
+const TOKEN_H = TOKEN_W;                     // 포트레이트 1:1 비율
+const BORDER_THICKNESS = 2;                  // 세력 컬러 테두리 두께
+const HP_BAR_W = TOKEN_W * 1.0;             // HP 바가 토큰과 같은 너비
+const HP_BAR_H = 4;                          // HP 바 높이
+const TICK_UNIT = 10000;                     // 1눈금 = 1만 병력
+const BADGE_SIZE = 10;                       // 병종 아이콘 배지 크기
+
+// ─── 눈금 HP 바 드로어 ───────────────────────────────────────────────────
+function drawTickedHPBar(
+  g: PIXI.Graphics,
+  unit: { hp: number; maxHp: number; factionId: string },
+  expectedDamage: number,
+) {
+  g.clear();
+  const ticks = Math.max(1, unit.maxHp / TICK_UNIT); // 전체 눈금 수
+  const pct = Math.max(0, Math.min(1, unit.hp / unit.maxHp));
+  const filledW = HP_BAR_W * pct;
+  const segW = HP_BAR_W / ticks;
+  const ox = -HP_BAR_W / 2;
+  const oy = 0;
+  const isEnemy = unit.factionId !== PLAYER_FACTION;
+
+  // 배경
+  g.beginFill(0x111111, 0.85);
+  g.drawRect(ox, oy, HP_BAR_W, HP_BAR_H);
+  g.endFill();
+
+  // 예상 데미지 미리보기 (노란색, 먼저 그림)
+  if (expectedDamage > 0) {
+    const afterPct = Math.max(0, Math.min(1, (unit.hp - expectedDamage) / unit.maxHp));
+    const afterW = HP_BAR_W * afterPct;
+    // 체력 유실 구간을 노란색으로
+    if (pct > afterPct) {
+      g.beginFill(0xffdd00, 0.9);
+      g.drawRect(ox + afterW, oy, filledW - afterW, HP_BAR_H);
+      g.endFill();
+    }
+  } else if (expectedDamage < 0) {
+    // 회복 미리보기 (형광 연두)
+    const afterPct = Math.max(0, Math.min(1, (unit.hp - expectedDamage) / unit.maxHp)); // expectedDamage 음수
+    const afterW = HP_BAR_W * afterPct;
+    g.beginFill(0x39ff14, 0.9);
+    g.drawRect(ox + filledW, oy, afterW - filledW, HP_BAR_H);
+    g.endFill();
+  }
+
+  // 현재 HP 채색
+  const displayPct = expectedDamage > 0
+    ? Math.max(0, Math.min(1, (unit.hp - expectedDamage) / unit.maxHp))
+    : pct;
+  const displayW = HP_BAR_W * displayPct;
+
+  const hpColor = isEnemy
+    ? 0xef4444
+    : (pct > 0.5 ? 0x22c55e : pct > 0.25 ? 0xf59e0b : 0xef4444);
+  g.beginFill(hpColor);
+  g.drawRect(ox, oy, displayW, HP_BAR_H);
+  g.endFill();
+
+  // 눈금 구분선 (tick marks)
+  const fullTicks = Math.floor(ticks);
+  g.lineStyle(1, 0x000000, 0.55);
+  for (let i = 1; i <= fullTicks; i++) {
+    const lineX = ox + segW * i;
+    if (lineX >= ox && lineX <= ox + HP_BAR_W - 1) {
+      g.moveTo(lineX, oy);
+      g.lineTo(lineX, oy + HP_BAR_H);
+    }
+  }
+  g.lineStyle(0);
+
+  // 외곽선
+  g.lineStyle(0.5, 0x000000, 0.6);
+  g.drawRect(ox, oy, HP_BAR_W, HP_BAR_H);
+  g.lineStyle(0);
+}
+
+// ─── 메인 유닛 스프라이트 컴포넌트 ──────────────────────────────────────
 export function UnitSprite({ id }: { id: string }) {
-  const containerRef    = useRef<PIXI.Container>(null);
-  const dmgBarRef       = useRef<PIXI.Graphics>(null);
-  const healBarRef      = useRef<PIXI.Graphics>(null);
+  const containerRef     = useRef<PIXI.Container>(null);
+  const hpBarRef         = useRef<PIXI.Graphics>(null);
   const waypointIndexRef = useRef(0);
 
-  const unit           = useGameStore(s => s.units[id]);
-  const turnIndex      = useGameStore(s => getTurnOrder(s.units).indexOf(id));
+  const unit            = useGameStore(s => s.units[id]);
+  const allUnits        = useGameStore(useShallow(s => s.units));
+  const turnIndex       = useGameStore(s => getTurnOrder(s.units).indexOf(id));
+  const totalUnits      = useGameStore(useShallow(s => Object.keys(s.units).filter(uid => s.units[uid].state !== 'DEAD').length));
   const selectedUnitId  = useGameStore(s => s.selectedUnitId);
   const selectUnit      = useGameStore(s => s.selectUnit);
   const setHoveredUnit  = useGameStore(s => s.setHoveredUnitId);
-  
+
   const skillTargetMode = useGameStore(s => s.skillTargetMode);
   const selectedSkillId = useGameStore(s => s.selectedSkillId);
   const hoveredMapTile  = useGameStore(s => s.hoveredMapTile);
@@ -48,18 +138,9 @@ export function UnitSprite({ id }: { id: string }) {
     const ct = containerRef.current;
     if (!ct) return;
 
-    if (dmgBarRef.current) {
-      // 깜빡임 점등 효과 (0.3 ~ 1.0)
-      dmgBarRef.current.alpha = (Math.sin(Date.now() / 150) + 1) / 2 * 0.7 + 0.3;
-    }
-    if (healBarRef.current) {
-      healBarRef.current.alpha = (Math.sin(Date.now() / 150) + 1) / 2 * 0.7 + 0.3;
-    }
-
     const u = useGameStore.getState().units[id];
     if (!u || u.state === 'IDLE' || u.state === 'DEAD') {
       if (u) {
-        // 확정된 이동 타겟이 있다면 (아직 state는 IDLE이어도) 시각적으로만 옮겨둠
         const isTarget = useGameStore.getState().selectedUnitId === id;
         const dest = useGameStore.getState().confirmedDestination;
         if (isTarget && dest) {
@@ -90,13 +171,12 @@ export function UnitSprite({ id }: { id: string }) {
       return;
     }
 
-    // KNOCKBACK: push/pull 등 강제 스킬 이동 (트윈 애니메이션)
+    // KNOCKBACK: push/pull 강제 이동
     if (u.state === 'KNOCKBACK') {
       const dx = u.targetX - ct.x;
       const dy = u.targetY - ct.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > 0.5) {
-        // 밀리거나 당기는 속도는 보통 이동보다 훨씬 빠르고 역동적이어야 함 (3.5배)
         const ratio = Math.min(1, (MOVE_SPEED * 3.5 * delta) / dist);
         ct.x += dx * ratio;
         ct.y += dy * ratio;
@@ -104,10 +184,7 @@ export function UnitSprite({ id }: { id: string }) {
         ct.x = u.targetX;
         ct.y = u.targetY;
         useGameStore.setState(s => ({
-          units: {
-            ...s.units,
-            [id]: { ...s.units[id], state: 'IDLE', x: ct.x, y: ct.y },
-          },
+          units: { ...s.units, [id]: { ...s.units[id], state: 'IDLE', x: ct.x, y: ct.y } },
         }));
       }
       return;
@@ -119,10 +196,7 @@ export function UnitSprite({ id }: { id: string }) {
 
     if (!path || path.length === 0 || wpIdx >= path.length) {
       useGameStore.setState(s => ({
-        units: {
-          ...s.units,
-          [id]: { ...s.units[id], state: 'IDLE', x: ct.x, y: ct.y, movePath: [] },
-        },
+        units: { ...s.units, [id]: { ...s.units[id], state: 'IDLE', x: ct.x, y: ct.y, movePath: [] } },
       }));
       waypointIndexRef.current = 0;
       return;
@@ -150,26 +224,44 @@ export function UnitSprite({ id }: { id: string }) {
   if (!unit || unit.state === 'DEAD') return null;
 
   const isSelected = selectedUnitId === id;
-  const color = FACTIONS[unit.factionId]?.color ?? 0xaaaaaa;
+  const factionColor = FACTIONS[unit.factionId]?.color ?? 0xaaaaaa;
   const isActive  = useGameStore(s => s.activeUnitId) === id;
-  const alpha = 1.0; // 전황 및 경고 UI 시인성 확보
+  const hasActed  = unit.hasActed;
   const iconTexture = getUnitTypeTexture(unit.unitType);
 
-  const hasActed  = unit.hasActed;
+  // ─── 포트레이트 텍스처 결정 ──────────────────────────────────────────
+  // characterId가 있으면 영웅 이미지 URL 시도, 없으면 폴백 아바타
+  const [portraitTexture, setPortraitTexture] = useState<PIXI.Texture>(() =>
+    getPortraitFallbackTexture(`${id}-${unit.factionId}`, factionColor, unit.id.slice(0, 2))
+  );
 
-  // 선택된 유닛은 흰색 외곽선, 이미 행동을 마친 유닛은 짙은 회색(dimmed) 배경
-  const bgColor = isSelected ? 0xffffff : (hasActed && !isActive ? 0x555555 : color);
-  const iconTint = (hasActed && !isActive) ? 0x777777 : 0xffffff;
+  useEffect(() => {
+    if (!unit.characterId) return;
+    const url = getCharacterImageUrl(unit.characterId, 'token');
+    const tex = PIXI.Texture.from(url);
+    if (tex.valid) {
+      setPortraitTexture(tex);
+    } else {
+      tex.baseTexture.on('loaded', () => setPortraitTexture(tex));
+      tex.baseTexture.on('error', () => {
+        // URL 로드 실패 → 폴백 유지
+      });
+    }
+  }, [unit.characterId, id, unit.factionId, factionColor]);
+
+  // 테두리 색상: 선택된 경우 흰색, 행동완료면 회색, 기본은 세력 컬러
+  const borderColor = isSelected ? 0xffffff : (hasActed && !isActive ? 0x444444 : factionColor);
+  const dimmed = hasActed && !isActive;
 
   const attackMode = useGameStore(s => s.attackTargetMode);
   const activeUnit = useGameStore(s => s.activeUnitId ? s.units[s.activeUnitId] : null);
   const isTargetableEnemy = attackMode && activeUnit && unit.factionId !== activeUnit.factionId;
 
-  // --- 예상 데미지 계산 ---
+  // ─── 예상 데미지 계산 ───────────────────────────────────────────────────
   let expectedDamage = 0;
   let isWeak = false;
   let isResist = false;
-  
+
   if (skillTargetMode && selectedSkillId && hoveredMapTile && activeUnit) {
     const skill = MOCK_SKILLS[selectedSkillId];
     if (skill) {
@@ -185,42 +277,41 @@ export function UnitSprite({ id }: { id: string }) {
           if (skill.targetType === 'any') validTarget = true;
           else if (skill.targetType === 'enemy' && isEnemy) validTarget = true;
           else if (skill.targetType === 'ally' && !isEnemy) validTarget = true;
-          else if (skill.targetType === 'empty' && isEnemy) validTarget = true; // 빈 구역용 공격은 적에게만 데미지
+          else if (skill.targetType === 'empty' && isEnemy) validTarget = true;
 
           if (validTarget) {
             const dmgEffect = skill.effects.find(e => e.type === 'damage');
             if (dmgEffect) {
               const attackElement = dmgEffect.element || 'none';
               const resistMap = UNIT_RESISTANCES[unit.unitType];
-              const elementalMult = (resistMap && attackElement in resistMap) 
-                ? (resistMap[attackElement as keyof typeof resistMap] || 1.0) 
+              const elementalMult = (resistMap && attackElement in resistMap)
+                ? (resistMap[attackElement as keyof typeof resistMap] || 1.0)
                 : 1.0;
               isResist = elementalMult < 1.0;
-              
+              isWeak   = elementalMult > 1.0;
+
               const atk = getEffectiveStat(activeUnit, 'attack');
               const def = getEffectiveStat(unit, 'defense');
-              const rawDmg = Math.max(1, (atk * (dmgEffect.value || 1) * elementalMult) - (def * 0.5));
-              expectedDamage = Math.round(rawDmg);
+              expectedDamage = Math.round(Math.max(1, (atk * (dmgEffect.value || 1) * elementalMult) - (def * 0.5)));
             } else if (skill.effects.some(e => e.type === 'heal')) {
               const healEffect = skill.effects.find(e => e.type === 'heal')!;
-              const atkOrInt = activeUnit.generalIntelligence ? (activeUnit.generalIntelligence * 10) : getEffectiveStat(activeUnit, 'attack');
-              const rawHeal = Math.max(1, atkOrInt * (healEffect.value || 1));
-              expectedDamage = -Math.round(rawHeal); // 회복은 음수 데미지로 처리
+              const atkOrInt = activeUnit.generalIntelligence
+                ? (activeUnit.generalIntelligence * 10)
+                : getEffectiveStat(activeUnit, 'attack');
+              expectedDamage = -Math.round(Math.max(1, atkOrInt * (healEffect.value || 1)));
             }
           }
         }
       }
     }
   } else if (attackMode && activeUnit && hoveredMapTile && isTargetableEnemy) {
-    // 일반 공격 타겟팅 호버 데미지 예측
     if (unit.logicalX === hoveredMapTile.lx && unit.logicalY === hoveredMapTile.ly) {
       const dest = confirmedDest || { lx: activeUnit.logicalX, ly: activeUnit.logicalY };
-      const validTargets = getAttackableTargets(activeUnit, useGameStore.getState().units, dest.lx, dest.ly);
+      const validTargets = getAttackableTargets(activeUnit, allUnits, dest.lx, dest.ly);
       if (validTargets.some(t => t.id === id)) {
         const atk = getEffectiveStat(activeUnit, 'attack');
         const def = getEffectiveStat(unit, 'defense');
-        const rawDmg = Math.max(1, atk - (def * 0.5));
-        expectedDamage = Math.round(rawDmg);
+        expectedDamage = Math.round(Math.max(1, atk - (def * 0.5)));
       }
     }
   }
@@ -229,17 +320,23 @@ export function UnitSprite({ id }: { id: string }) {
   if (isActive && !hasActed) cursorType = 'pointer';
   else if (isTargetableEnemy) cursorType = 'crosshair';
 
-  // ─── 공통 onpointerdown 핸들러 ─────────────────────────────────────────────
+  // ─── 턴 순서 투명도 계산 (0-based index) ──────────────────────────────
+  // turnIndex: 현재 유닛의 이번 라운드 행동 순서
+  // 뒤로 갈수록 점점 투명해짐
+  const turnAlpha = turnIndex < 0
+    ? 0.1
+    : Math.max(0.12, 1.0 - (turnIndex / Math.max(1, totalUnits)) * 0.88);
+
+  // ─── 클릭 핸들러 ───────────────────────────────────────────────────────
   const handlePointerDown = (e: PIXI.FederatedPointerEvent) => {
-    if (e.button === 2) return; // 우클릭 무시
+    if (e.button === 2) return;
     const state = useGameStore.getState();
     const clickedUnit = state.units[id];
     if (!clickedUnit) return;
 
     const isAlly = clickedUnit.factionId === PLAYER_FACTION;
-    const isEnemy = !isAlly;
+    const isEnemyUnit = !isAlly;
 
-    // ─ 공격 대상 선택 로직 ─
     if (state.attackTargetMode && state.confirmedDestination && state.selectedUnitId) {
       e.stopPropagation();
       if (isAlly || clickedUnit.state === 'DEAD') return;
@@ -252,11 +349,9 @@ export function UnitSprite({ id }: { id: string }) {
       return;
     }
 
-    // ─ 이동 모드 or 대기 상태 ─
     if (state.confirmedDestination) return;
-    if (isEnemy) return; // 버블링 허용 → App.tsx 타일 이동 처리
+    if (isEnemyUnit) return;
 
-    // ─ 아군 유닛 선택 / 제자리 행동 ─
     e.stopPropagation();
     if (state.selectedUnitId === id) {
       const u = state.units[id];
@@ -264,8 +359,6 @@ export function UnitSprite({ id }: { id: string }) {
       return;
     }
     selectUnit(id);
-    // 사방이 막혀 이동 불가한 경우, 선택 즉시 제자리 confirmMove → ActionMenu 바로 표시
-    // (moveRangeTiles는 selectUnit 후 재계산되므로 다음 tick에서 확인)
     setTimeout(() => {
       const st = useGameStore.getState();
       if (st.selectedUnitId === id && st.activeUnitId === id && st.moveRangeTiles.size === 0) {
@@ -273,7 +366,6 @@ export function UnitSprite({ id }: { id: string }) {
         if (u) st.confirmMove(u.logicalX, u.logicalY);
       }
     }, 0);
-
   };
 
   return (
@@ -282,23 +374,36 @@ export function UnitSprite({ id }: { id: string }) {
       key={id}
       x={visualX}
       y={visualY}
-      alpha={alpha}
+      alpha={1.0}
       zIndex={visualY}
       eventMode="static"
       hitArea={null as unknown as PIXI.IHitArea}
     >
-      {/* 쿼터뷰 역변환: 스프라이트를 화면상 직립으로 그림 */}
+      {/*
+        아이소메트릭 역변환 컨테이너:
+        rotation=-45°, scaleX=0.5 → 내부의 직사각형이 화면에서 마름모로 보임
+      */}
       <Container rotation={-Math.PI / 4} scale={{ x: 0.5, y: 1.0 }}>
-        
-        {/* [핵심] 배경 Sprite에 이벤트 핸들러를 달아,
-             역변환된 실제 화면 위치에서 hit detection이 이루어지도록 함.
-             (외부 Container의 hitArea는 아이소메트릭 변환으로 왜곡됨) */}
+
+        {/* ── 세력 컬러 테두리 (마름모 외곽, 선 굵기=BORDER_THICKNESS) ── */}
+        <Graphics
+          draw={(g) => {
+            g.clear();
+            g.lineStyle(BORDER_THICKNESS + (isSelected ? 1.5 : 0), borderColor, isSelected ? 1.0 : 0.9);
+            g.beginFill(0x1a1a2e, 0.15); // 아주 살짝 어두운 반투명 배경
+            g.drawRect(-TOKEN_W / 2, -TOKEN_H, TOKEN_W, TOKEN_H);
+            g.endFill();
+          }}
+        />
+
+        {/* ── 포트레이트 이미지 (마름모 안쪽 채움) ── */}
         <Sprite
-          texture={PIXI.Texture.WHITE}
-          tint={bgColor}
-          width={MAP_CONFIG.TILE_SIZE * 0.8}
-          height={MAP_CONFIG.TILE_SIZE * 0.8}
+          texture={portraitTexture}
+          width={TOKEN_W - BORDER_THICKNESS * 2}
+          height={TOKEN_H - BORDER_THICKNESS * 2}
           anchor={{ x: 0.5, y: 1.0 }}
+          y={-BORDER_THICKNESS}
+          alpha={dimmed ? 0.45 : 1.0}
           eventMode="static"
           cursor={cursorType}
           onpointerenter={() => {
@@ -313,200 +418,132 @@ export function UnitSprite({ id }: { id: string }) {
             handlePointerDown(e);
           }}
         />
-        
-        {/* 병종 아이콘 */}
-        {iconTexture && (
-          <Sprite
-            texture={iconTexture}
-            width={MAP_CONFIG.TILE_SIZE * 0.6}
-            height={MAP_CONFIG.TILE_SIZE * 0.6}
-            anchor={0.5}
-            y={-12}
-            alpha={0.9}
-            tint={iconTint}
+
+        {/* ── 행동 완료 dimming 오버레이 ── */}
+        {dimmed && (
+          <Graphics
+            draw={(g) => {
+              g.clear();
+              g.beginFill(0x000000, 0.38);
+              g.drawRect(-TOKEN_W / 2, -TOKEN_H, TOKEN_W, TOKEN_H);
+              g.endFill();
+            }}
           />
         )}
-        
-        {/* 장수(GENERAL) 왕관 표시 */}
+
+        {/* ── 병종 아이콘 배지 (HP바 기준 좌상단) ── */}
+        {iconTexture && (
+          <Container
+            x={-HP_BAR_W / 2}
+            y={-(BADGE_SIZE + 3)}
+          >
+            {/* 배지 배경 */}
+            <Graphics
+              draw={(g) => {
+                g.clear();
+                g.beginFill(0x111111, 0.82);
+                g.drawRect(0, 0, BADGE_SIZE + 2, BADGE_SIZE + 2);
+                g.endFill();
+                g.lineStyle(0.8, borderColor, 0.8);
+                g.drawRect(0, 0, BADGE_SIZE + 2, BADGE_SIZE + 2);
+                g.lineStyle(0);
+              }}
+            />
+            {/* 병종 아이콘 */}
+            <Sprite
+              texture={iconTexture}
+              width={BADGE_SIZE}
+              height={BADGE_SIZE}
+              anchor={0}
+              x={1}
+              y={1}
+              tint={dimmed ? 0x666666 : 0xffffff}
+            />
+          </Container>
+        )}
+
+        {/* ── 장수(GENERAL) 왕관 배지 ── */}
         {unit.unitType === 'GENERAL' && (
           <Text
             text="👑"
-            style={new PIXI.TextStyle({ fontSize: 14 })}
-            anchor={0.5}
-            y={-24}
+            style={new PIXI.TextStyle({ fontSize: 10 })}
+            anchor={{ x: 1, y: 0 }}
+            x={TOKEN_W / 2 - 1}
+            y={-TOKEN_H + 2}
             resolution={4}
           />
         )}
 
-        {/* 아군 오폭(Friendly Fire) 경고 아이콘 */}
+        {/* ── 턴 순서 번호 (전체 유닛, 뒤로 갈수록 투명) ── */}
+        {turnIndex >= 0 && (
+          <Text
+            text={isActive ? '▼' : String(turnIndex + 1)}
+            style={new PIXI.TextStyle({
+              fontSize: isActive ? 14 : 11,
+              fill: isActive ? '#ffee00' : '#ffffff',
+              fontWeight: 'bold',
+              stroke: '#000000',
+              strokeThickness: isActive ? 3 : 2,
+            })}
+            anchor={0.5}
+            x={0}
+            y={-TOKEN_H - (isActive ? 10 : 8)}
+            alpha={isActive ? 1.0 : turnAlpha}
+            resolution={4}
+          />
+        )}
+
+        {/* ── 아군 오폭(Friendly Fire) 경고 ── */}
         {expectedDamage > 0 && unit.factionId === PLAYER_FACTION && (
           <Text
             text="⚠️"
-            style={new PIXI.TextStyle({ fontSize: 20 })}
+            style={new PIXI.TextStyle({ fontSize: 16 })}
             anchor={0.5}
-            x={16}
-            y={-24}
+            x={TOKEN_W / 2 - 2}
+            y={-TOKEN_H / 2}
             resolution={4}
           />
         )}
 
-        {/* 사망 예정(Lethal Damage) 표시 아이콘 (적군 한정, 혹은 적군 처치 확신) */}
+        {/* ── 치명타(Lethal) 예고 아이콘 ── */}
         {expectedDamage >= unit.hp && unit.factionId !== PLAYER_FACTION && (
           <Text
             text="💀"
-            style={new PIXI.TextStyle({ fontSize: 20 })}
+            style={new PIXI.TextStyle({ fontSize: 16 })}
             anchor={0.5}
-            x={16}
-            y={-24}
+            x={TOKEN_W / 2 - 2}
+            y={-TOKEN_H / 2}
             resolution={4}
           />
         )}
-        
-        {/* 미니 HP 바 (전황 파악용) */}
-        <Graphics 
-          draw={(g) => {
-            g.clear();
-            const w = 24;
-            const h = 4;
-            const ox = -w / 2;
-            const oy = -4; // 아이콘 밑
-            
-            // outline & background
-            g.beginFill(0x222222);
-            g.drawRect(ox, oy, w, h);
-            g.endFill();
 
-            // hp fill
-            const pct = Math.max(0, Math.min(1, unit.hp / unit.maxHp));
-            const isEnemy = unit.factionId !== PLAYER_FACTION;
-            const color = isEnemy ? 0xef4444 : (pct > 0.5 ? 0x22c55e : pct > 0.2 ? 0xf59e0b : 0xef4444);
-            
-            if (expectedDamage > 0) {
-              const afterHp = Math.max(0, unit.hp - expectedDamage);
-              const afterPct = Math.max(0, Math.min(1, afterHp / unit.maxHp));
-              
-              // 남게 될 체력 부분 (데미지로 깎인 후)
-              g.beginFill(color);
-              g.drawRect(ox + 1, oy + 1, (w - 2) * afterPct, h - 2);
-              g.endFill();
-            } else if (expectedDamage < 0) {
-              // 현재 체력 (기존 체력 부분)
-              g.beginFill(color);
-              g.drawRect(ox + 1, oy + 1, (w - 2) * pct, h - 2);
-              g.endFill();
-            } else {
-              g.beginFill(color);
-              g.drawRect(ox + 1, oy + 1, (w - 2) * pct, h - 2);
-              g.endFill();
-            }
-          }}
-        />
-
-        {/* 깎일 예정인 데미지 부분 (노란색 점등 효과 적용) */}
-        {expectedDamage > 0 && (
-          <Graphics
-            ref={dmgBarRef}
-            draw={(g) => {
-              g.clear();
-              const w = 24; const h = 4;
-              const ox = -w / 2; const oy = -4;
-              
-              const pct = Math.max(0, Math.min(1, unit.hp / unit.maxHp));
-              const afterHp = Math.max(0, unit.hp - expectedDamage);
-              const afterPct = Math.max(0, Math.min(1, afterHp / unit.maxHp));
-              const dmgPct = pct - afterPct;
-              
-              if (dmgPct > 0) {
-                g.beginFill(0xffea00); // 밝은 노랑
-                g.drawRect(ox + 1 + (w - 2) * afterPct, oy + 1, (w - 2) * dmgPct, h - 2);
-                g.endFill();
-              }
-            }}
-          />
-        )}
-        
-        {/* 차오를 예정인 회복 부분 (형광 연두색 점등 효과 적용) */}
-        {expectedDamage < 0 && (
-          <Graphics
-            ref={healBarRef}
-            draw={(g) => {
-              g.clear();
-              const w = 24; const h = 4;
-              const ox = -w / 2; const oy = -4;
-              
-              const pct = Math.max(0, Math.min(1, unit.hp / unit.maxHp));
-              const afterHp = Math.min(unit.maxHp, unit.hp - expectedDamage); // expectedDamage가 음수
-              const afterPct = Math.max(0, Math.min(1, afterHp / unit.maxHp));
-              const healPct = afterPct - pct;
-              
-              if (healPct > 0) {
-                g.beginFill(0x39ff14); // 형광 연두색
-                g.drawRect(ox + 1 + (w - 2) * pct, oy + 1, (w - 2) * healPct, h - 2);
-                g.endFill();
-              }
-            }}
-          />
-        )}
-
-        <Text
-          text={unit.id.substring(0, 4)}
-          style={
-            new PIXI.TextStyle({
-              fontSize: 10,
-              fill: isSelected ? 0x000000 : 0xffffff,
-              fontWeight: 'bold',
-            })
-          }
-          anchor={0.5}
-          y={2}
-          resolution={4}
-        />
-
-        {isActive && (
-          <Text
-            text="▼"
-            style={new PIXI.TextStyle({ fontSize: 16, fill: 0xffff00, fontWeight: 'bold' })}
-            anchor={0.5}
-            y={-34}
-            resolution={4}
-          />
-        )}
-        {!isActive && turnIndex === 1 && (
-          <Text
-            text="next"
-            style={new PIXI.TextStyle({ fontSize: 13, fill: '#ff4444', fontWeight: '900', stroke: '#ffffff', strokeThickness: 2 })}
-            anchor={0.5}
-            y={-34}
-            resolution={4}
-          />
-        )}
-        {!isActive && turnIndex > 1 && turnIndex <= 10 && (
-          <Text
-            text={turnIndex.toString()}
-            style={new PIXI.TextStyle({ fontSize: 12, fill: '#ffffff', fontWeight: 'bold', stroke: '#000000', strokeThickness: 2 })}
-            anchor={0.5}
-            y={-34}
-            resolution={4}
-          />
-        )}
-        
-        {/* 상성 (WEAK / RESIST) 렌더링 - 아이소메트릭 보정 컨테이너 내부이므로 정면으로 깨끗하게 렌더링됨 */}
+        {/* ── 상성 표시 (WEAK / RESIST) ── */}
         {(isWeak || isResist) && (
           <Text
             text={isWeak ? 'WEAK' : 'RESIST'}
-            style={new PIXI.TextStyle({ 
-              fontSize: 16, 
-              fill: isWeak ? '#fca5a5' : '#9ca3af', 
-              fontWeight: '900', 
+            style={new PIXI.TextStyle({
+              fontSize: 12,
+              fill: isWeak ? '#fca5a5' : '#9ca3af',
+              fontWeight: '900',
               fontStyle: 'italic',
-              stroke: '#000000', 
-              strokeThickness: 3 
+              stroke: '#000000',
+              strokeThickness: 2,
             })}
             anchor={0.5}
-            y={-50}
+            x={0}
+            y={-TOKEN_H - 20}
             resolution={4}
           />
         )}
+
+        {/* ── HP 눈금 바 (하단) ── */}
+        <Graphics
+          ref={hpBarRef}
+          draw={(g) => drawTickedHPBar(g, unit, expectedDamage)}
+          x={0}
+          y={2}
+        />
+
       </Container>
     </Container>
   );

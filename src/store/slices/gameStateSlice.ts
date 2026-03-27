@@ -71,6 +71,8 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
             : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-nova', 'mock-dash-attack', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'],
           skillCooldowns: {}, skillCharges: {}, state: 'IDLE',
           logicalX: pLx, logicalY: pLy, x: tileToPixel(pLx), y: tileToPixel(pLy), targetX: tileToPixel(pLx), targetY: tileToPixel(pLy), movePath: [], isHero: isHeroP,
+          // 샘플: 첫 번째 아군 지휘관에 char_001 포트레이트 연결
+          ...(i === 0 ? { characterId: 'char_001' } : {}),
         };
 
         newUnits[`unit-e-${i}`] = {
@@ -156,6 +158,8 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         generalStrength: isGeneral ? 8 : undefined,
         generalIntelligence: isGeneral ? 8 : undefined,
         isHero,
+        // 샘플: 첫 번째 아군 장수(i===0)에 char_001 포트레이트 연결
+        ...(i === 0 && fId === attacker ? { characterId: 'char_001' } : {}),
       };
     }
 

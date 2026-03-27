@@ -23,6 +23,7 @@ import HoverInfoPanel   from './components/HoverInfoPanel';
 import TurnEndPrompt    from './components/TurnEndPrompt';
 import FieldMenu        from './components/FieldMenu';
 import UnitListModal    from './components/UnitListModal';
+import BattleAbandonModal from './components/BattleAbandonModal';
 import { useGameStore } from './store/gameStore';
 import { useAppStore }  from './store/appStore';
 import { useInteractionManager } from './hooks/useInteractionManager';
@@ -54,8 +55,7 @@ function CombatLog() {
 }
 
 // ─── HUD ──────────────────────────────────────────────────────────────────
-function TurnHUD() {
-  const goTo           = useAppStore(s => s.goTo);
+function TurnHUD({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const selectedUnitId = useGameStore(s => s.selectedUnitId);
   const confirmedDest  = useGameStore(s => s.confirmedDestination);
   const units          = useGameStore(s => s.units);
@@ -69,7 +69,7 @@ function TurnHUD() {
   const attackTargetMode = useGameStore(s => s.attackTargetMode);
   const skillTargetMode = useGameStore(s => s.skillTargetMode);
   const biome          = useGameStore(s => s.biome);
-  const screen         = useAppStore(s => s.screen); // lint 에러 해결을 위해 추가
+  const screen         = useAppStore(s => s.screen);
 
   if (screen !== 'BATTLE') return null;
   const handleDeselect = useCallback(() => selectUnit(null), [selectUnit]);
@@ -94,10 +94,10 @@ function TurnHUD() {
         <div className="text-xs text-gray-400">
           아군 {playerUnits.length}기 · 적군 {enemyAlive}기 생존
         </div>
-        {/* 군략화면으로 복귀 버튼 */}
+        {/* 군략화면으로 복귀 버튼 — 포기 확인 다이얼로그 경유 */}
         <button
           className="mt-1 px-3 py-1 rounded bg-gray-800/80 border border-gray-600 text-gray-300 text-xs pointer-events-auto cursor-pointer hover:bg-gray-700/80"
-          onClick={() => goTo('STRATEGY_MAP')}
+          onClick={onAbandonRequest}
         >
           🗺 군략화면
         </button>
@@ -205,7 +205,7 @@ const clampCamera = (cam: { x: number; y: number; scale: number }) => ({
 });
 
 // ─── 전투 화면 ───────────────────────────────────────────────────────────────
-function BattleScreen() {
+function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const setMapData          = useGameStore(s => s.setMapData);
   const setCities           = useGameStore(s => s.setCities);
   const setBattleType       = useGameStore(s => s.setBattleType);
@@ -624,7 +624,7 @@ function BattleScreen() {
         </div>
       )}
 
-      <TurnHUD />
+      <TurnHUD onAbandonRequest={onAbandonRequest} />
       <ActionMenu camera={camera} />
       <TurnEndPrompt />
       <UnitInfoPanel />
@@ -643,14 +643,31 @@ function App() {
   const screen = useAppStore(s => s.screen);
   const goTo   = useAppStore(s => s.goTo);
 
+  // 전투 포기 확인 모달 상태
+  const [showAbandonModal, setShowAbandonModal] = useState(false);
+
+  const handleAbandonRequest = useCallback(() => {
+    setShowAbandonModal(true);
+  }, []);
+
+  const handleAbandonConfirm = useCallback(() => {
+    setShowAbandonModal(false);
+    goTo('STRATEGY_MAP');
+  }, [goTo]);
+
+  const handleAbandonCancel = useCallback(() => {
+    setShowAbandonModal(false);
+  }, []);
+
   // 모바일 뒤로가기 인터셉트
   useEffect(() => {
     const handlePopState = () => {
       // 히스토리 스택에 항상 현재 상태 push → 앱 이탈 방지
       history.pushState(null, '', location.href);
-      // TITLE이 아닐 때: 이전 화면으로 복귀
-      if (screen === 'BATTLE')         goTo('STRATEGY_MAP');
-      else if (screen === 'STRATEGY_MAP') goTo('TITLE');
+      // BATTLE 화면: 포기 확인 다이얼로그 표시
+      if (screen === 'BATTLE') {
+        setShowAbandonModal(true);
+      } else if (screen === 'STRATEGY_MAP') goTo('TITLE');
       else if (screen === 'STRATEGY_TURN') goTo('STRATEGY_MAP');
       else if (screen === 'BATTLE_RESULT') goTo('STRATEGY_MAP');
       else if (screen === 'ENDING')   goTo('TITLE');
@@ -662,7 +679,17 @@ function App() {
 
   if (screen === 'TITLE')         return <TitleScreen />;
   if (screen === 'STRATEGY_MAP')  return <StrategyMapScreen />;
-  if (screen === 'BATTLE')        return <BattleScreen />;
+  if (screen === 'BATTLE')        return (
+    <>
+      <BattleScreen onAbandonRequest={handleAbandonRequest} />
+      {showAbandonModal && (
+        <BattleAbandonModal
+          onConfirm={handleAbandonConfirm}
+          onCancel={handleAbandonCancel}
+        />
+      )}
+    </>
+  );
   if (screen === 'BATTLE_RESULT') return <BattleResultScreen />;
   if (screen === 'ENDING')        return <EndingScreen />;
 
