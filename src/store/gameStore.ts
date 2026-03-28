@@ -11,6 +11,7 @@ import { createGameStateSlice } from './slices/gameStateSlice';
 import { createTurnSystemSlice } from './slices/turnSystemSlice';
 import { createInteractionSlice } from './slices/interactionSlice';
 import { createCampaignSlice } from './slices/campaignSlice';
+import { createDialogueSlice } from './slices/dialogueSlice';
 
 export * from './slices/storeTypes';
 
@@ -76,5 +77,6 @@ export const useGameStore = create<RootState>((...a) => ({
   ...createTurnSystemSlice(...a),
   ...createInteractionSlice(...a),
   ...createCampaignSlice(...a),
+  ...createDialogueSlice(...a),
   // createCharacterSlice 제거 — characters는 appStore.characters로 이관
 }));

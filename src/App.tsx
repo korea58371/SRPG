@@ -36,6 +36,10 @@ import StrategyMapScreen from './screens/StrategyMapScreen';
 import BattleResultScreen from './screens/BattleResultScreen';
 import EndingScreen      from './screens/EndingScreen';
 
+// 대화 시스템
+import DialogueOverlay     from './components/DialogueOverlay';
+import BattleDialogueBubble from './components/BattleDialogueBubble';
+
 import './index.css';
 
 // ─── React.memo 래핑: camera 변경 시 불필요한 리렌더링 방지 ──────────────────
@@ -642,6 +646,8 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
       <TurnTransitionLayer />
       <FieldMenu />
       <UnitListModal />
+      {/* 전투 중 대화 말풍선 — PixiJS 레이어 위, z-900 */}
+      <BattleDialogueBubble />
     </div>
   );
 }
@@ -686,7 +692,13 @@ function App() {
   }, [screen, goTo]);
 
   if (screen === 'TITLE')         return <TitleScreen />;
-  if (screen === 'STRATEGY_MAP')  return <StrategyMapScreen />;
+  if (screen === 'STRATEGY_MAP')  return (
+    <>
+      <StrategyMapScreen />
+      {/* 등용/인연 이벤트 대화창 — 전략맵에 오버레이 */}
+      <DialogueOverlay />
+    </>
+  );
   if (screen === 'BATTLE')        return (
     <>
       <BattleScreen onAbandonRequest={handleAbandonRequest} />

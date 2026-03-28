@@ -3,6 +3,7 @@ import { TerrainType } from '../../types/gameTypes';
 import type { Unit, UnitType, LevelObjective } from '../../types/gameTypes';
 import { UNIT_CONFIG, BASE_STATS, PLAYER_FACTION, MAP_CONFIG, isPlayableTile } from '../../constants/gameConfig';
 import { tileToPixel } from '../gameStore'; // Helper functions from Root store wrapper
+import { useAppStore } from '../appStore';
 
 export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
   units: {},
@@ -131,13 +132,24 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
     const enemyTop   = { minY: pMinY + enemyMargin, maxY: pMinY + enemyMargin + 5 };
     const enemyBot   = { minY: pMaxY - enemyMargin - 5, maxY: pMaxY - enemyMargin };
 
+    const appStoreState = useAppStore.getState();
+    const characters = appStoreState.characters;
+    const deployingHeroIds = appStoreState.pendingBattle?.deployingHeroIds || [];
+
     const totalUnits = UNIT_CONFIG.PLAYER_UNIT_COUNT + (UNIT_CONFIG.INITIAL_SPAWN_COUNT - UNIT_CONFIG.PLAYER_UNIT_COUNT);
     for (let i = 0; i < totalUnits; i++) {
       let lx = 0, ly = 0;
       let isHero = false;
-      const fId = i < UNIT_CONFIG.PLAYER_UNIT_COUNT ? attacker : defender;
+      const isPlayer = i < UNIT_CONFIG.PLAYER_UNIT_COUNT;
+      const fId = isPlayer ? attacker : defender;
 
-      isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && i < 2);
+      let characterData = null;
+      if (isPlayer && i < deployingHeroIds.length) {
+        characterData = characters[deployingHeroIds[i]];
+        isHero = true;
+      } else {
+        isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && i < 2);
+      }
 
       let tries = 0;
       let found = false;
@@ -190,9 +202,54 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       }
 
       const id = `unit-${Date.now()}-${i}`;
-      const isGeneral = i === 0 || i === UNIT_CONFIG.PLAYER_UNIT_COUNT;
-      const type = isGeneral ? 'GENERAL' : getRandomType();
-      const stats = isGeneral ? BASE_STATS.GENERAL : BASE_STATS[type];
+      
+      let type: UnitType;
+      let baseHp = 0;
+      let attackVal = 0;
+      let defenseVal = 0;
+      let speedVal = 0;
+      let moveStepsVal = 3;
+      let attackRangeVal = 1;
+      let generalCharisma, generalStrength, generalIntelligence;
+      let charIdAttr: { characterId?: string } = {};
+
+      if (characterData) {
+        type = characterData.troopType ?? 'INFANTRY';
+        const st = BASE_STATS[type];
+        
+        // 편제 병력 수 기반 HP
+        baseHp = (characterData.troopCount ?? st.hp) * 1.5; 
+        
+        // 장수 능력치 기반 추가 보정 (무력->공격, 지력->방어)
+        attackVal = st.attack * (1 + characterData.baseStats.strength / 40);
+        defenseVal = st.defense * (1 + characterData.baseStats.intelligence / 40);
+        speedVal = st.speed;
+        moveStepsVal = st.moveSteps;
+        attackRangeVal = st.attackRange;
+        generalCharisma = characterData.baseStats.charisma / 10;
+        generalStrength = characterData.baseStats.strength / 10;
+        generalIntelligence = characterData.baseStats.intelligence / 10;
+        
+        charIdAttr = { characterId: characterData.id };
+      } else {
+        const isGeneral = i === 0 || i === UNIT_CONFIG.PLAYER_UNIT_COUNT;
+        type = isGeneral ? 'GENERAL' : getRandomType();
+        const stats = isGeneral ? BASE_STATS.GENERAL : BASE_STATS[type];
+        baseHp = stats.hp * (isHero ? 2 : 1);
+        attackVal = stats.attack * (isHero ? 1.5 : 1);
+        defenseVal = stats.defense;
+        speedVal = stats.speed;
+        moveStepsVal = stats.moveSteps;
+        attackRangeVal = stats.attackRange;
+        
+        if (isGeneral) {
+          generalCharisma = 3; generalStrength = 8; generalIntelligence = 8;
+        }
+        
+        if (i === 0 && fId === attacker && !deployingHeroIds.length) {
+          charIdAttr = { characterId: 'char_001' }; // Fallback
+        }
+      }
 
       const px = tileToPixel(lx);
       const py = tileToPixel(ly);
@@ -201,9 +258,9 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         id,
         factionId: fId,
         unitType: type,
-        hp: stats.hp * (isHero ? 2 : 1), maxHp: stats.hp * (isHero ? 2 : 1),
-        attack: stats.attack * (isHero ? 1.5 : 1), defense: stats.defense,
-        speed: stats.speed, moveSteps: stats.moveSteps, attackRange: stats.attackRange,
+        hp: baseHp, maxHp: baseHp,
+        attack: attackVal, defense: defenseVal,
+        speed: speedVal, moveSteps: moveStepsVal, attackRange: attackRangeVal,
         hasActed: false,
         mp: 100, maxMp: 100, rage: 0, morale: 100,
         skills: isHero ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-aoe-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'] : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'], 
@@ -213,12 +270,9 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         x: px, y: py,
         targetX: px, targetY: py,
         movePath: [],
-        generalCharisma: isGeneral ? 3 : undefined,
-        generalStrength: isGeneral ? 8 : undefined,
-        generalIntelligence: isGeneral ? 8 : undefined,
+        generalCharisma, generalStrength, generalIntelligence,
         isHero,
-        // 샘플: 첫 번째 아군 장수(i===0)에 char_001 포트레이트 연결
-        ...(i === 0 && fId === attacker ? { characterId: 'char_001' } : {}),
+        ...charIdAttr,
       };
     }
 

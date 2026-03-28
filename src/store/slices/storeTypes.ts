@@ -2,6 +2,9 @@ import type { StateCreator } from 'zustand';
 import type { Unit, TerrainType, MapObjectData, BattleType, TilePos, FactionId, LevelObjective } from '../../types/gameTypes';
 import type { MapInfo } from '../../utils/mapGenerator';
 import type { BattleOutcome } from '../../types/appTypes';
+import type { DialogueSlice } from '../../types/dialogueTypes';
+
+export type { DialogueSlice };
 
 // [통합] CharacterSlice 제거 — characters는 appStore.characters로 이관됨
 
@@ -112,6 +115,7 @@ export interface InteractionSlice {
 }
 
 // [수정] CharacterSlice 제거 — RootState에서 CharacterSlice 분리
-export type RootState = GameStateSlice & TurnSystemSlice & InteractionSlice & CampaignSlice;
+// [추가] DialogueSlice — 이벤트 대화 시스템 상태
+export type RootState = GameStateSlice & TurnSystemSlice & InteractionSlice & CampaignSlice & DialogueSlice;
 
 export type StoreSlice<T> = StateCreator<RootState, [], [], T>;

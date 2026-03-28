@@ -62,6 +62,25 @@ export type DiplomacyRel = 'ally' | 'neutral' | 'war';
 // ─── 전략 페이즈 행동 ────────────────────────────────────────────────────────
 export type StrategyAction = 'domestic' | 'diplomacy' | 'war' | 'end_turn';
 
+// ─── 행동 탭 ─────────────────────────────────────────────────────────────────
+export type ActionTab = 'recommend' | 'talent' | 'military' | 'domestic' | 'diplomacy';
+
+// ─── 행동 아이템 (ActionPanel 리스트용) ────────────────────────────────────────
+export interface StrategyActionItem {
+  id: string;
+  tab: ActionTab;
+  icon: string;
+  label: string;
+  subLabel?: string;
+  cost: number;             // AP 소모량 (0 = 무료)
+  isAvailable: boolean;     // false이면 비활성(회색) 표시
+  danger?: boolean;         // true이면 빨간색 강조 (선전포고 등)
+  onExecute: () => void;
+}
+
+// ─── AP(행동 포인트) 시스템 ────────────────────────────────────────────────────
+export const AP_PER_TURN = 5; // 턴당 기본 AP
+
 // ─── appStore 상태 타입 ──────────────────────────────────────────────────────
 export interface StrategyState {
   screen: AppScreen;
@@ -74,8 +93,15 @@ export interface StrategyState {
   factionResources: Record<FactionId, FactionResource>;
 
   strategyTurn: number;
+  remainingAP: number;          // 현재 턴 남은 행동 포인트
   selectedProvinceId: string | null;
   pendingBattle: {
+    attackerProvinceId: string;
+    defenderProvinceId: string;
+    isCheat?: boolean;
+    deployingHeroIds?: string[];
+  } | null;
+  pendingDeployment: {
     attackerProvinceId: string;
     defenderProvinceId: string;
     isCheat?: boolean;
@@ -94,9 +120,12 @@ export interface StrategyState {
   executeDomestic: (provinceId: string) => void;
   executeDiplomacy: (targetFactionId: string) => void;
   declareWar: (attackerId: string, defenderId: string) => void;
+  cancelDeployment: () => void;
+  confirmDeployment: (deployingHeroIds: string[]) => void;
   resolveBattle: (outcome: BattleOutcome) => void;
   endStrategyTurn: () => void;
   resetGame: () => void;
+  consumeAP: (amount: number) => boolean; // AP 소모, 부족하면 false 반환
 
   // Character 관련 Actions
   addCharacter: (char: Character) => void;

@@ -7,11 +7,14 @@ import { create } from 'zustand';
 import type {
   StrategyState, AppScreen, BattleOutcome, DiplomacyRel, FactionResource
 } from '../types/appTypes';
+import { AP_PER_TURN } from '../types/appTypes';
+
 import type { FactionId } from '../types/gameTypes';
 import type { Character } from '../types/characterTypes';
 import { generateProvinces } from '../utils/provinceGenerator';
 import { PLAYER_FACTION, FACTIONS } from '../constants/gameConfig';
 import { processDomesticTurn } from '../utils/domesticLogic';
+import { ALL_CHARACTERS } from '../data/characters/_registry';
 
 const WIN_RATIO = 0.7;
 
@@ -24,96 +27,16 @@ function checkVictory(provinces: StrategyState['provinces']): 'good' | 'bad' | n
   return null;
 }
 
-// ─ 초기 캐릭터 풀 ────────────────────────────────────────────────────────────
-// 추후 외부 JSON으로 이관 예정. 현재는 인라인 정의.
-const INITIAL_CHARACTERS: Record<string, Character> = {
-  'hero_001': {
-    id: 'hero_001',
-    name: '아르토리우스',
-    factionId: PLAYER_FACTION,
-    state: 'Factioned',
-    locationProvinceId: null, // startGame()에서 수도 ID로 설정됨
-    birthYear: 1980, lifespan: 80, lifespanBonus: 0,
-    loyalty: 100,
-    relationships: { 'hero_002': 50 },
-    baseStats: { hp: 100, strength: 80, intelligence: 40, politics: 50, charisma: 90, speed: 12 },
-    traits: [], equipment: [],
-    skills: ['slash'],
-    troopType: 'INFANTRY',
-    troopCount: 500,
-  },
-  'hero_002': {
-    id: 'hero_002',
-    name: '베네딕트',
-    factionId: PLAYER_FACTION,
-    state: 'Factioned',
-    locationProvinceId: null,
-    birthYear: 1985, lifespan: 60, lifespanBonus: 5,
-    loyalty: 85,
-    relationships: { 'hero_001': 50 },
-    baseStats: { hp: 70, strength: 30, intelligence: 95, politics: 80, charisma: 70, speed: 8 },
-    traits: [], equipment: [],
-    skills: ['heal'],
-    troopType: 'ARCHER',
-    troopCount: 300,
-  },
-  // 재야 인재 풀 (FreeAgent — 인재 등용으로 획득 가능)
-  'hero_003': {
-    id: 'hero_003',
-    name: '가브리엘 바르트',
-    factionId: null,
-    state: 'FreeAgent',
-    locationProvinceId: null,
-    birthYear: 1978, lifespan: 70, lifespanBonus: 0,
-    loyalty: 0,
-    relationships: {},
-    baseStats: { hp: 90, strength: 70, intelligence: 60, politics: 40, charisma: 75, speed: 10 },
-    traits: [], equipment: [],
-    skills: ['cleave'],
-    troopType: 'CAVALRY',
-    troopCount: 0,
-  },
-  'hero_004': {
-    id: 'hero_004',
-    name: '이리나 솔렌',
-    factionId: null,
-    state: 'FreeAgent',
-    locationProvinceId: null,
-    birthYear: 1990, lifespan: 65, lifespanBonus: 0,
-    loyalty: 0,
-    relationships: {},
-    baseStats: { hp: 65, strength: 25, intelligence: 100, politics: 75, charisma: 60, speed: 9 },
-    traits: [], equipment: [],
-    skills: ['heal'],
-    troopType: null,
-    troopCount: 0,
-  },
-  // 적 세력 영웅 (적 세력 소속)
-  'hero_101': {
-    id: 'hero_101',
-    name: '적장 레드워드',
-    factionId: 'faction_02',
-    state: 'Factioned',
-    locationProvinceId: null,
-    birthYear: 1975, lifespan: 50, lifespanBonus: 0,
-    loyalty: 100,
-    relationships: {},
-    baseStats: { hp: 120, strength: 85, intelligence: 20, politics: 30, charisma: 50, speed: 10 },
-    traits: [], equipment: [],
-    skills: ['cleave'],
-    troopType: 'SPEARMAN',
-    troopCount: 400,
-  },
-};
-
 export const useAppStore = create<StrategyState>((set, get) => ({
   screen: 'TITLE',
   provinces: {},
-  characters: INITIAL_CHARACTERS,
+  characters: ALL_CHARACTERS,  // 캐릭터 레지스트리에서 주입
   factionResources: {},
   strategyTurn: 1,
+  remainingAP: AP_PER_TURN,
   selectedProvinceId: null,
   pendingBattle: null,
+  pendingDeployment: null,
   diplomacyRelations: {},
   lastBattleOutcome: null,
   endingType: null,
@@ -144,6 +67,9 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       Object.values(updatedChars).forEach(char => {
         if (char.factionId === PLAYER_FACTION && char.state === 'Factioned') {
           updatedChars[char.id] = { ...char, locationProvinceId: playerCapital.id };
+        } else if (char.state === 'FreeAgent') {
+          // TODO: 추후 지역별 무작위 분배로 변경. 현재는 테스트를 위해 아군 수도에 전원 배치
+          updatedChars[char.id] = { ...char, locationProvinceId: playerCapital.id };
         }
       });
     }
@@ -154,8 +80,10 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       characters: updatedChars,
       factionResources,
       strategyTurn: 1,
+      remainingAP: AP_PER_TURN,
       selectedProvinceId: null,
       pendingBattle: null,
+      pendingDeployment: null,
       diplomacyRelations,
       lastBattleOutcome: null,
       endingType: null,
@@ -187,9 +115,14 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     set({ diplomacyRelations: { ...diplomacyRelations, [targetFactionId]: 'ally' } });
   },
 
-  // ─── 전쟁 선언 → 전투 화면으로 ─────────────────────────────────────────
+  // ─── 전쟁 선언 → 출격 준비 모달로 이동 ──────────────────────────────────
   declareWar: (attackerId, defenderId) => {
-    const { provinces } = get();
+    const { provinces, remainingAP } = get();
+    if (remainingAP < 2) {
+      console.warn('DeclareWar Rejected: 행동력 부족', { remainingAP });
+      return;
+    }
+
     const attacker = provinces[attackerId];
     const defender = provinces[defenderId];
     if (!attacker || !defender) return;
@@ -204,8 +137,30 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       return;
     }
 
+    // 전투 화면으로 진입하지 않고, 상태만 기록하여 모달을 켬
     set({
-      pendingBattle: { attackerProvinceId: attackerId, defenderProvinceId: defenderId },
+      pendingDeployment: { attackerProvinceId: attackerId, defenderProvinceId: defenderId },
+    });
+  },
+
+  // ─── 출격 준비 취소 ──────────────────────────────────────────────────────────
+  cancelDeployment: () => set({ pendingDeployment: null }),
+
+  // ─── 출격 확정 → 실제 전투 화면 진입 ─────────────────────────────────────────
+  confirmDeployment: (deployingHeroIds: string[]) => {
+    const { pendingDeployment, consumeAP } = get();
+    if (!pendingDeployment) return;
+    
+    // AP는 이때 소모됨
+    if (!consumeAP(2)) return;
+
+    set({
+      pendingBattle: { 
+        attackerProvinceId: pendingDeployment.attackerProvinceId, 
+        defenderProvinceId: pendingDeployment.defenderProvinceId,
+        deployingHeroIds
+      },
+      pendingDeployment: null,
       screen: 'BATTLE',
     });
   },
@@ -279,6 +234,7 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       provinces: newProvinces,
       factionResources: newFactionResources,
       strategyTurn: strategyTurn + 1,
+      remainingAP: AP_PER_TURN, // 턴 시작 시 AP 완전 충전
       screen: victory ? 'ENDING' : 'STRATEGY_MAP',
       endingType: victory,
       diplomacyRelations,
@@ -289,16 +245,26 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   resetGame: () => set({
     screen: 'TITLE',
     provinces: {},
-    characters: INITIAL_CHARACTERS,
+    characters: ALL_CHARACTERS,
     factionResources: {},
     strategyTurn: 1,
+    remainingAP: AP_PER_TURN,
     selectedProvinceId: null,
     pendingBattle: null,
+    pendingDeployment: null,
     diplomacyRelations: {},
     lastBattleOutcome: null,
     endingType: null,
     worldSeed: 0,
   }),
+
+  // ─── AP 소모 ─────────────────────────────────────────────────────────────
+  consumeAP: (amount: number) => {
+    const { remainingAP } = get();
+    if (remainingAP < amount) return false;
+    set({ remainingAP: remainingAP - amount });
+    return true;
+  },
 
   // ─── Character 관련 Actions ───────────────────────────────────────────────
   addCharacter: (char: Character) => set(s => ({

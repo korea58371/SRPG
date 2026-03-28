@@ -9,6 +9,8 @@ import { Stage, Container, Graphics as PixiGraphics, Text as PixiText, Sprite, u
 import * as PIXI from 'pixi.js';
 import HeroListModal from '../components/HeroListModal';
 import DomesticModal, { type DomesticMenuType } from '../components/DomesticModal';
+import ActionPanel from '../components/ActionPanel';
+import SortieModal from '../components/SortieModal';
 
 // 지형 스프라이트 매니페스트 (public/assets/ui/terrain/ 기반)
 const TERRAIN_MANIFEST: Record<string, string[]> = {
@@ -70,15 +72,22 @@ export const StrategyMapScreen = () => {
   const storeProvinces = useAppStore(s => s.provinces);
   const selectedProvinceId = useAppStore(s => s.selectedProvinceId);
   const selectProvince = useAppStore(s => s.selectProvince);
-  const executeDomestic = useAppStore(s => s.executeDomestic);
-  const declareWar = useAppStore(s => s.declareWar);
   const endStrategyTurn = useAppStore(s => s.endStrategyTurn);
+  const factionResources = useAppStore(s => s.factionResources);
+  const remainingAP = useAppStore(s => s.remainingAP);
+
+  // 플레이어 세력 자원
+  const playerResources = factionResources[PLAYER_FACTION] ?? null;
 
   const [mapMode, setMapMode] = useState<MapMode>('faction');
   const [activeDomesticMenu, setActiveDomesticMenu] = useState<DomesticMenuType>(null);
 
   const openDomestic = (menu: DomesticMenuType) => setActiveDomesticMenu(menu);
   const closeDomestic = () => setActiveDomesticMenu(null);
+
+  // 전략맵 널리실 화면 (PIXI Stage: 우측 ActionPanel 300px 제외)
+  const MAP_PANEL_WIDTH = 300; // 우측 패널 너비
+  const BOTTOM_BAR_HEIGHT = 52; // 하단 바 높이
 
   // 화면 크기
   const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -90,13 +99,16 @@ export const StrategyMapScreen = () => {
   }, []);
 
   // --- 화면 줌/팬 핸들러 및 Tweening 상태 ---
-  // Math.max: 긴 폭 기준 100% 맞춤 (짧은 축은 잘리지만 드래그로 확인 가능)
+  // PIXI Stage 크기: 우측 패널 제외
+  const stageW = dimensions.w - MAP_PANEL_WIDTH;
+  const stageH = dimensions.h - BOTTOM_BAR_HEIGHT;
+
   const initialFitScale = typeof window !== 'undefined'
-    ? Math.max(window.innerWidth / SVG_W, window.innerHeight / SVG_H)
+    ? Math.max(stageW / SVG_W, stageH / SVG_H)
     : 1.0;
   const initialPosition = {
-    x: typeof window !== 'undefined' ? (window.innerWidth - SVG_W * initialFitScale) / 2 : 0,
-    y: typeof window !== 'undefined' ? (window.innerHeight - SVG_H * initialFitScale) / 2 : 0
+    x: typeof window !== 'undefined' ? (stageW - SVG_W * initialFitScale) / 2 : 0,
+    y: typeof window !== 'undefined' ? (stageH - SVG_H * initialFitScale) / 2 : 0
   };
 
   const [scale, setScale] = useState(initialFitScale);
@@ -180,18 +192,18 @@ export const StrategyMapScreen = () => {
     const mapW = SVG_W * sc;
     const mapH = SVG_H * sc;
     let cx = newX, cy = newY;
-    if (mapW > dimensions.w) {
-      cx = Math.max(dimensions.w - mapW, Math.min(0, cx));
+    if (mapW > stageW) {
+      cx = Math.max(stageW - mapW, Math.min(0, cx));
     } else {
-      cx = (dimensions.w - mapW) / 2;
+      cx = (stageW - mapW) / 2;
     }
-    if (mapH > dimensions.h) {
-      cy = Math.max(dimensions.h - mapH, Math.min(0, cy));
+    if (mapH > stageH) {
+      cy = Math.max(stageH - mapH, Math.min(0, cy));
     } else {
-      cy = (dimensions.h - mapH) / 2;
+      cy = (stageH - mapH) / 2;
     }
     return { x: cx, y: cy };
-  }, [dimensions]);
+  }, [stageW, stageH]);
 
 
   useEffect(() => {
@@ -200,7 +212,7 @@ export const StrategyMapScreen = () => {
       const zoomIn = e.deltaY < 0;
       const factor = zoomIn ? 1.25 : 0.8;
 
-      const minScale = Math.max(dimensions.w / SVG_W, dimensions.h / SVG_H);
+      const minScale = Math.max(stageW / SVG_W, stageH / SVG_H);
       const newTargetScale = Math.min(Math.max(targetScaleRef.current * factor, minScale), 8);
 
       if (!containerRef.current) return;
@@ -527,16 +539,7 @@ export const StrategyMapScreen = () => {
     : (provinces as Record<string, Province>);
   const selectedProvince = selectedProvinceId ? activeProvinces[selectedProvinceId] : null;
 
-  // 선전포고 가능 여부: 선택된 Province가 적 소유이고, 육로 인접(adjacentIds) 혹은 해상 원정(navalAdjacentIds) 가능한 아군 영지가 있는지 확인
-  const attackerProvinceId = selectedProvinceId && selectedProvince && selectedProvince.owner !== PLAYER_FACTION
-    ? Object.values(activeProvinces).find(
-      p => p.owner === PLAYER_FACTION && (
-        p.adjacentIds.includes(selectedProvinceId) ||
-        (p.isCoastal && selectedProvince.isCoastal && (p.navalAdjacentIds || []).includes(selectedProvinceId))
-      )
-    )?.id ?? null
-    : null;
-  const canDeclareWar = attackerProvinceId !== null && selectedProvinceId !== null;
+  // 선전포고 로직은 ActionPanel에서 담당
 
   // 지형 마름모 클리핑 커스텀 마스크 (바다 침범 방지)
   const [terrainMask, setTerrainMask] = useState<PIXI.Graphics | null>(null);
@@ -1156,11 +1159,13 @@ export const StrategyMapScreen = () => {
   const lod2Alpha = Math.max(0, Math.min(1, (scale - LOD_THRESHOLD) / FADE_RANGE));
 
   return (
-    <div className="smap-container">
-      <div className="smap-header-bar flex items-center justify-between pointer-events-none relative z-10 px-4">
-        <h1 className="smap-title font-title text-2xl font-bold text-white drop-shadow-md">
-          지방 행정 <span className="text-gray-300 ml-2 text-sm italic opacity-80">- WebGL Engine</span>
+    <div className="smap-root" style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+      {/* 상단 타이틀 바: absolute floating */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 16px', pointerEvents: 'none' }}>
+        <h1 className="smap-title font-title text-xl font-bold text-white drop-shadow-md opacity-60">
+          지방 행정 <span className="text-gray-300 ml-2 text-xs italic opacity-60">- WebGL Engine</span>
         </h1>
+
         {/* 우측 중앙 상단: 맵 모드 토글 바 */}
         <div className="flex bg-slate-800/80 p-1 rounded-md mt-2 ml-4 relative z-10 shadow-lg pointer-events-auto">
           {(['faction'] as MapMode[]).map(m => (
@@ -1179,14 +1184,17 @@ export const StrategyMapScreen = () => {
         ref={containerRef}
         className="smap-map-area"
         style={{
-          position: 'relative',
+          position: 'absolute',
+          top: 0,
+          left: 0,
           overflow: 'hidden',
           backgroundColor: '#98886e',
           cursor: isDraggingMap ? 'grabbing' : 'grab',
           touchAction: 'none',
-          width: '100%',
-          height: '100vh',
+          width: stageW,
+          height: stageH,
         }}
+
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -1195,8 +1203,8 @@ export const StrategyMapScreen = () => {
         onContextMenu={handleContextMenu}
       >
         <Stage
-          width={dimensions.w}
-          height={dimensions.h}
+          width={stageW}
+          height={stageH}
           options={{
             backgroundColor: 0x98886e,
             backgroundAlpha: 0, // 캔버스 투명 → CSS div의 배경색(#98886e)이 보임
@@ -1214,7 +1222,7 @@ export const StrategyMapScreen = () => {
           <PixiGraphics draw={(g) => {
             g.clear();
             g.beginFill(0x98886e, 1);
-            g.drawRect(0, 0, dimensions.w, dimensions.h);
+            g.drawRect(0, 0, stageW, stageH);
             g.endFill();
           }} zIndex={0} />
 
@@ -1284,8 +1292,8 @@ export const StrategyMapScreen = () => {
                 const screenX = position.x + ti.x * scale;
                 const screenY = position.y + ti.y * scale;
                 const displaySize = Math.min(Math.max(ti.s, 8), 18);
-                if (screenX < -displaySize || screenX > dimensions.w + displaySize) return null;
-                if (screenY < -displaySize || screenY > dimensions.h + displaySize) return null;
+                if (screenX < -displaySize || screenX > stageW + displaySize) return null;
+                if (screenY < -displaySize || screenY > stageH + displaySize) return null;
 
                 // 텍스트와 달리 맵 줌인/아웃 시 지형 오브젝트는 맵과 함께 크기가 변함 (기존 대비 80% 축소)
                 const spriteScale = (displaySize / 64) * 0.8;
@@ -1391,137 +1399,185 @@ export const StrategyMapScreen = () => {
 
       </div>
 
-      {/* Province 상세 패널 */}
-      {selectedProvince && (
-        <div
-          className="smap-panel absolute top-[10%] left-6 w-80 bg-slate-900 border-2 border-slate-700 shadow-2xl rounded p-4 text-white z-20 transition-all smap-enter-anim pointer-events-auto"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* 패널 헤더 */}
-          <div className="flex justify-between items-start mb-4 border-b border-slate-700 pb-2">
-            <div>
-              <h2 className="text-xl font-bold font-title text-amber-500 shadow-amber-900/50 drop-shadow-sm">{selectedProvince.name}</h2>
-              <div className="text-sm font-semibold text-slate-400 mt-1">{FACTIONS[selectedProvince.owner]?.name || '중립 영토'}</div>
-            </div>
-            {selectedProvince.isCapital && (
-              <div className="bg-red-900/80 text-red-200 text-xs px-2 py-1 rounded font-bold border border-red-700/50 shadow-sm">
-                세력 수도
-              </div>
-            )}
-            <button onClick={() => selectProvince(null)} className="text-slate-400 hover:text-white transition-colors bg-slate-800 hover:bg-slate-700 px-2 rounded-sm border border-slate-600">
-              ✕
-            </button>
-          </div>
-
-          <div className="space-y-4 text-sm mt-2 font-mono">
-            {/* 지형 환경 및 기후 스펙 */}
-            <div className="grid grid-cols-3 gap-2 bg-slate-800/80 p-2.5 rounded border border-slate-700 mb-1 shadow-inner">
-              <div className="col-span-3 pb-1.5 border-b border-slate-700/50 mb-1 flex justify-between items-center">
-                <span className="text-slate-400 text-xs font-bold tracking-widest">BIOME</span>
-                <span className="text-sky-300 font-bold uppercase drop-shadow-sm">{selectedProvince.terrainType}</span>
-              </div>
-              <div>
-                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">기온(위도)</span>
-                <span className="font-bold text-red-300">{(selectedProvince.temperature * 100).toFixed(0)}°</span>
-              </div>
-              <div>
-                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">습윤도</span>
-                <span className="font-bold text-blue-300">{(selectedProvince.moisture * 100).toFixed(0)}%</span>
-              </div>
-              <div>
-                <span className="text-slate-500 text-[10px] block mb-0.5 font-bold">지형 보너스</span>
-                <span className="font-bold text-emerald-300">N/A</span>
+      {/* ── 좌상단 세력 자원 HUD ── */}
+      <div
+        style={{
+          position: 'absolute', top: 12, left: 12, zIndex: 25,
+          background: 'rgba(8,9,24,0.82)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: 6,
+          padding: '8px 14px',
+          display: 'flex',
+          gap: 16,
+          alignItems: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        {playerResources && (
+          <>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', letterSpacing: '0.08em', fontFamily: 'sans-serif', marginBottom: 1 }}>GOLD</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#fbbf24', fontFamily: 'sans-serif' }}>
+                💰 {playerResources.gold.toLocaleString()}
               </div>
             </div>
-
-            {/* 스탯 표시 */}
-            <div className="grid grid-cols-2 gap-3 bg-slate-800/50 p-2.5 rounded border border-slate-700">
-              <div><span className="text-slate-500 text-xs block mb-1">치안도</span><span className="font-bold text-emerald-400">{selectedProvince.security}%</span></div>
-              <div><span className="text-slate-500 text-xs block mb-1">지배력</span><span className="font-bold text-indigo-400">안정</span></div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t border-slate-700/50">
-              <div className="flex justify-between"><span className="text-slate-400 font-bold">턴 당 금:</span><span className="text-yellow-400 font-bold">+{selectedProvince.baseGoldProduction}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400 font-bold">턴 당 군량:</span><span className="text-orange-400 font-bold">+{selectedProvince.baseFoodProduction}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400 font-bold">기본 징병력:</span><span className="text-blue-400 font-bold">{selectedProvince.baseRecruitment}</span></div>
-              <div className="flex justify-between pt-1 mt-1 border-t border-slate-700/30">
-                <span className="text-slate-500 font-bold">보유 금:</span>
-                <span className="text-yellow-300 font-bold">{selectedProvince.gold ?? 0}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500 font-bold">보유 식량:</span>
-                <span className="text-orange-300 font-bold">{selectedProvince.food ?? 0}</span>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', letterSpacing: '0.08em', fontFamily: 'sans-serif', marginBottom: 1 }}>FOOD</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#86efac', fontFamily: 'sans-serif' }}>
+                🌾 {playerResources.food.toLocaleString()}
               </div>
             </div>
-
-            {/* 내정 버튼: 플레이어 소유 영지에만 표시 */}
-            {selectedProvince.owner === PLAYER_FACTION && (
-              <button
-                onClick={(e) => { e.stopPropagation(); selectedProvinceId && executeDomestic(selectedProvinceId); }}
-                className="w-full mt-4 py-2 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 text-white rounded font-bold transition-colors shadow-inner flex items-center justify-center gap-2"
-              >
-                <span className="drop-shadow-md">🏛️</span> 내정 명령 하달
-              </button>
-            )}
-
-            {/* 선전포고 버튼: 적 영지이며 플레이어 인접 영지가 있을 때만 표시 */}
-            {canDeclareWar && attackerProvinceId && (
-              <button
-                onClick={(e) => { e.stopPropagation(); declareWar(attackerProvinceId, selectedProvinceId!); }}
-                className="w-full mt-2 py-2 bg-red-900 hover:bg-red-800 border border-red-600 text-white rounded font-bold transition-colors shadow-inner flex items-center justify-center gap-2"
-              >
-                <span className="drop-shadow-md">⚔️</span> 선전포고
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 하단 전체 UI 바 */}
-      <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-none">
-        <div className="flex items-end justify-between px-6 pb-6">
-
-          {/* 좌측: 전체 내정 메뉴 버튼 그룹 */}
-          <div className="flex items-center gap-2 pointer-events-auto">
-            <span className="text-xs text-slate-500 font-bold tracking-widest mr-1">전체 내정</span>
-            {([
-              { menu: 'recruit' as DomesticMenuType, icon: '🧑‍💼', label: '인재 등용', color: 'bg-amber-800 hover:bg-amber-700 border-amber-600' },
-              { menu: 'conscript' as DomesticMenuType, icon: '📯', label: '징병', color: 'bg-blue-800 hover:bg-blue-700 border-blue-600' },
-              { menu: 'formation' as DomesticMenuType, icon: '⚙️', label: '군단 편제', color: 'bg-sky-800 hover:bg-sky-700 border-sky-600' },
-              { menu: 'personnel' as DomesticMenuType, icon: '🏛️', label: '인사', color: 'bg-violet-800 hover:bg-violet-700 border-violet-600' },
-            ] as const).map(({ menu, icon, label, color }) => (
-              <button
-                key={menu}
-                onClick={(e) => { e.stopPropagation(); openDomestic(menu); }}
-                className={`px-4 py-2.5 ${color} text-white rounded font-bold border shadow-xl smap-btn-anim transition-all flex items-center gap-1.5 text-sm`}
-              >
-                <span>{icon}</span>
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* 우측: 인물록 + 턴 종료 */}
-          <div className="flex items-center gap-3 pointer-events-auto">
-            <button
-              onClick={(e: React.MouseEvent) => { e.stopPropagation(); useGameStore.getState().setHeroListModalOpen(true); }}
-              className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded font-bold border-2 border-slate-500 shadow-xl smap-btn-anim transition-all flex items-center gap-2"
-            >
-              <span className="text-lg">📜</span> 인물록
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); endStrategyTurn(); }}
-              className="px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white rounded font-bold border-2 border-amber-500 shadow-xl smap-btn-anim transition-all"
-            >
-              ⏭ 턴 종료 <span className="ml-1 text-amber-200 opacity-80">({strategyTurn})</span>
-            </button>
-          </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', letterSpacing: '0.08em', fontFamily: 'sans-serif', marginBottom: 1 }}>MANPOWER</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#93c5fd', fontFamily: 'sans-serif' }}>
+                ⚒️ {playerResources.manpower.toLocaleString()}
+              </div>
+            </div>
+          </>
+        )}
+        <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12, textAlign: 'center' }}>
+          <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', letterSpacing: '0.08em', fontFamily: 'sans-serif', marginBottom: 1 }}>TURN</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#e0e7ff', fontFamily: 'sans-serif' }}>{strategyTurn}</div>
         </div>
       </div>
 
-      {/* 모달 */}
+      {/* ── 우측 ActionPanel ── */}
+      <ActionPanel onOpenDomesticModal={openDomestic} />
+
+      {/* ── 하단 고정 바 (전국란스 스타일) ── */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 0, left: 0,
+          width: dimensions.w,
+          height: BOTTOM_BAR_HEIGHT,
+          background: 'rgba(6,7,18,0.95)',
+          borderTop: '1px solid rgba(255,255,255,0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 12px',
+          zIndex: 25,
+          backdropFilter: 'blur(8px)',
+          pointerEvents: 'auto',
+          gap: 8,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* 좌측: 인물/부대/아이템 */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {([
+            { icon: '📜', label: '인물록', onClick: () => useGameStore.getState().setHeroListModalOpen(true) },
+            { icon: '📯', label: '징병', onClick: () => openDomestic('conscript') },
+            { icon: '⚙️', label: '편제', onClick: () => openDomestic('formation') },
+            { icon: '🏛️', label: '인사', onClick: () => openDomestic('personnel') },
+          ] as const).map(({ icon, label, onClick }) => (
+            <button
+              key={label}
+              onClick={onClick}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '5px 12px',
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 4,
+                color: '#d1d5db',
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: "'Noto Sans KR', sans-serif",
+                cursor: 'pointer',
+                transition: 'background 0.13s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.12)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
+            >
+              <span>{icon}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* 중앙: AP 게이지 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'sans-serif', letterSpacing: '0.05em' }}>행동력</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div
+                key={i}
+                style={{
+                  width: 14, height: 14,
+                  borderRadius: '50%',
+                  background: i < remainingAP
+                    ? 'radial-gradient(circle at 40% 35%, #fbbf24, #d97706)'
+                    : 'rgba(255,255,255,0.08)',
+                  border: i < remainingAP
+                    ? '1.5px solid rgba(251,191,36,0.6)'
+                    : '1.5px solid rgba(255,255,255,0.06)',
+                  boxShadow: i < remainingAP ? '0 0 5px rgba(251,191,36,0.4)' : 'none',
+                  transition: 'all 0.2s',
+                }}
+              />
+            ))}
+          </div>
+          <span style={{ fontSize: 10, color: remainingAP > 0 ? '#fbbf24' : '#6b7280', fontFamily: 'monospace', fontWeight: 700 }}>
+            {remainingAP}/5
+          </span>
+        </div>
+
+        {/* 우측: 선택 영지 빠른 정보 + 턴 종료 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {selectedProvince && (
+            <div style={{
+              display: 'flex', gap: 10, alignItems: 'center',
+              padding: '4px 10px',
+              background: 'rgba(255,255,255,0.04)',
+              borderRadius: 4,
+              border: '1px solid rgba(255,255,255,0.06)',
+              fontSize: 11,
+              color: 'rgba(255,255,255,0.6)',
+              fontFamily: 'sans-serif',
+            }}>
+              <span style={{ color: '#f0e8d8', fontWeight: 600 }}>{selectedProvince.name}</span>
+              <span>🌾{selectedProvince.food}</span>
+              <span>💰{selectedProvince.gold}</span>
+              <span style={{ color: '#94a3b8' }}>치안 {selectedProvince.security}%</span>
+              <button
+                onClick={() => selectProvince(null)}
+                style={{ color: '#6b7280', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
+              >✕</button>
+            </div>
+          )}
+          <button
+            onClick={() => endStrategyTurn()}
+            style={{
+              padding: '7px 20px',
+              background: remainingAP > 0
+                ? 'linear-gradient(135deg, #92400e, #b45309)'
+                : 'linear-gradient(135deg, #3f6212, #4d7c0f)',
+              border: 'none',
+              borderRadius: 4,
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 700,
+              fontFamily: "'Noto Sans KR', sans-serif",
+              cursor: 'pointer',
+              letterSpacing: '0.03em',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.15)')}
+            onMouseLeave={e => (e.currentTarget.style.filter = '')}
+          >
+            {remainingAP > 0 ? `⏭ 턴 종료` : `▶ 다음 턴`}
+          </button>
+        </div>
+      </div>
+
+      {/* ── 모달 ── */}
       <HeroListModal />
       <DomesticModal menu={activeDomesticMenu} onClose={closeDomestic} />
+      <SortieModal />
 
     </div>
   );

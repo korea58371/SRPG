@@ -621,6 +621,32 @@ canvas {
   100% { opacity: 1; transform: translateY(0); filter: blur(0px); }
 }
 
+/* ════════════════════════════════════════
+   이벤트 대화 시스템 (DialogueOverlay / BattleDialogueBubble)
+════════════════════════════════════════ */
 
+/* 타이프라이터 커서 깜빡임 */
+@keyframes dialogueCursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* 다음 진행 큐 펄스 */
+@keyframes dialogueCuePulse {
+  0%, 100% { opacity: 0.4; transform: translateX(0); }
+  50%       { opacity: 0.9; transform: translateX(2px); }
+}
+
+/* DialogueOverlay 진입 애니메이션 */
+@keyframes dialogueSlideUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* BattleDialogueBubble 진입 */
+@keyframes bubbleFadeIn {
+  from { opacity: 0; transform: translateY(-100%) scale(0.95); }
+  to   { opacity: 1; transform: translateY(-100%) scale(1); }
+}
 
 
