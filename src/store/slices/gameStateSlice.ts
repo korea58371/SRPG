@@ -30,7 +30,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       let cx = startX;
       let cy = startY;
       while (cx >= 0 && cx < MAP_CONFIG.WIDTH && cy >= 0 && cy < MAP_CONFIG.HEIGHT) {
-        const terrain = mapData?.[cy]?.[cx] ?? TerrainType.GRASS;
+        const terrain = mapData?.[cy]?.[cx] ?? TerrainType.SEA;
         const valid = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
         const playable = isPlayableTile(cx, cy, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
         if (playable && valid) return { lx: cx, ly: cy };
@@ -38,6 +38,25 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         cy += stepY;
       }
       return { lx: Math.floor(MAP_CONFIG.WIDTH/2), ly: Math.floor(MAP_CONFIG.HEIGHT/2) };
+    };
+
+    // 배치 실패 시 (200회 랜덤 시도 후 유효 타일 미발견) 가장 가까운 유효 타일을 전체 스캔으로 탐색
+    const findNearestValidTile = (preferX: number, preferY: number): { lx: number; ly: number } => {
+      const mapData = get().mapData;
+      let bestDist = Infinity;
+      let best = { lx: Math.floor(MAP_CONFIG.WIDTH / 2), ly: Math.floor(MAP_CONFIG.HEIGHT / 2) };
+      for (let y = 0; y < MAP_CONFIG.HEIGHT; y++) {
+        for (let x = 0; x < MAP_CONFIG.WIDTH; x++) {
+          const terrain = mapData?.[y]?.[x] ?? TerrainType.SEA;
+          const validT = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
+          const playable = isPlayableTile(x, y, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+          if (validT && playable && !usedTiles.has(`${x},${y}`)) {
+            const dist = Math.abs(x - preferX) + Math.abs(y - preferY);
+            if (dist < bestDist) { bestDist = dist; best = { lx: x, ly: y }; }
+          }
+        }
+      }
+      return best;
     };
 
     const getRandomType = (): UnitType => {
@@ -121,25 +140,24 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && i < 2);
 
       let tries = 0;
+      let found = false;
       while (tries < 200) {
         if (battleType === 'defensive') {
           if (fId === PLAYER_FACTION) {
-            // 아군: 맵 중앙 ±2칸 범위 (원래 로직 유지)
             lx = Math.floor(mapWidth / 2) + Math.floor(Math.random() * 4) - 2;
             ly = Math.floor(mapHeight / 2) + Math.floor(Math.random() * 4) - 2;
           } else {
-            // 적군: isPlayableTile이 허용하는 경계 안쪽에서 4방향 중 랜덤으로 스폰
             const side = Math.floor(Math.random() * 4);
-            if (side === 0) { // 왼쪽 경계
+            if (side === 0) {
               lx = enemyLeft.minX  + Math.floor(Math.random() * (enemyLeft.maxX  - enemyLeft.minX  + 1));
               ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-            } else if (side === 1) { // 오른쪽 경계
+            } else if (side === 1) {
               lx = enemyRight.minX + Math.floor(Math.random() * (enemyRight.maxX - enemyRight.minX + 1));
               ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-            } else if (side === 2) { // 위쪽 경계
+            } else if (side === 2) {
               lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
               ly = enemyTop.minY   + Math.floor(Math.random() * (enemyTop.maxY   - enemyTop.minY   + 1));
-            } else { // 아래쪽 경계
+            } else {
               lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
               ly = enemyBot.minY   + Math.floor(Math.random() * (enemyBot.maxY   - enemyBot.minY   + 1));
             }
@@ -150,16 +168,25 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         }
 
         const mapData = get().mapData;
-        const terrain = mapData?.[ly]?.[lx] ?? TerrainType.GRASS;
+        // 안전한 기본값: GRASS 대신 SEA(통과 불가) 사용 → mapData null 시 수쯙에 배치 방지
+        const terrain = mapData?.[ly]?.[lx] ?? TerrainType.SEA;
         const validTerrain = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
-        // ✅ 핵심 수정: 지형 타입뿐만 아니라 이동 가능 구역(안개 없음)인지도 반드시 검사
         const playable = isPlayableTile(lx, ly, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
-        
+
         if (validTerrain && playable && !usedTiles.has(`${lx},${ly}`)) {
+          found = true;
           usedTiles.add(`${lx},${ly}`);
           break;
         }
         tries++;
+      }
+
+      // 200회 시도 후에도 유효 타일을 컴지 못한 경우 → 가장 가까운 유효 타일으로 fallback (SEA/CLIFF 절대 배치 방지)
+      if (!found) {
+        const fallback = findNearestValidTile(lx, ly);
+        lx = fallback.lx;
+        ly = fallback.ly;
+        usedTiles.add(`${lx},${ly}`);
       }
 
       const id = `unit-${Date.now()}-${i}`;

@@ -328,26 +328,29 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const panStartTimeRef = useRef<number>(0);
   const PAN_DURATION   = 500; // ms
 
-  // 전투 진입 시 다이브 줌인 연출 (Lerp Animation)
+  // 전투 진입 시 다이브 줌인 연출 (Lerp Animation) — 연출 중 카메라 조작 잠금
   useEffect(() => {
     let rafId: number;
     let isAnimating = true;
+
+    // 연출 시작 즉시 입력 잠금
+    useGameStore.getState().setIsCameraLocked(true);
 
     const animateTransition = () => {
       setCamera(prev => {
         const target = targetScaleRef.current;
         if (!isAnimating || Math.abs(target - prev.scale) < 0.001) {
           isAnimating = false;
+          // 연출 완료 → 입력 잠금 해제
+          useGameStore.getState().setIsCameraLocked(false);
           return clampCamera({ ...prev, scale: target });
         }
-        
-        const newScale = prev.scale + (target - prev.scale) * 0.04; // 부드러운 텐션 (0.04)
-        
-        // 화면 정중앙을 기준으로 스케일 변화 보정
+
+        const newScale = prev.scale + (target - prev.scale) * 0.04;
         const centerX = window.innerWidth / 2;
         const centerY = window.innerHeight / 2;
         const scaleRatio = newScale / prev.scale;
-        
+
         return clampCamera({
           x: centerX - (centerX - prev.x) * scaleRatio,
           y: centerY - (centerY - prev.y) * scaleRatio,
@@ -364,6 +367,8 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
     return () => {
       isAnimating = false;
       cancelAnimationFrame(rafId);
+      // 컴포넌트 언마운트 시에도 잠금 해제 보장
+      useGameStore.getState().setIsCameraLocked(false);
     };
   }, []);
 
