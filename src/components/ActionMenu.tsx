@@ -155,6 +155,9 @@ export default function ActionMenu({ camera }: { camera: { x: number; y: number;
         className="absolute z-50 pointer-events-auto" 
         style={{ left, top }}
         onWheel={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerMove={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
       >
         <div className="bg-gray-900/95 border border-purple-500 rounded-xl p-3 shadow-2xl backdrop-blur-sm w-[260px]">
           <div className="flex justify-between items-center mb-3 border-b border-gray-600 pb-2">
@@ -269,6 +272,9 @@ export default function ActionMenu({ camera }: { camera: { x: number; y: number;
       className="absolute z-50 pointer-events-auto" 
       style={{ left, top }}
       onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
     >
       <div className="bg-gray-900/95 border border-gray-500 rounded-xl p-2 shadow-2xl backdrop-blur-sm min-w-[130px]">
         <p className="text-gray-300 text-xs font-bold mb-2 text-center tracking-wider">행동 선택</p>

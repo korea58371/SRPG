@@ -93,7 +93,7 @@ const TERRAIN_NAMES: Record<Exclude<TerrainType, 'ocean'>, string[][]> = {
 // ─── 파라미터 ─────────────────────────────────────────────────────────────────
 const MICRO_CELLS    = 12000;  // 마이크로셀 (12000개: Azgaar 스타일의 날카로운 프랙탈을 위한 초고해상도 배정)
 const PLATE_COUNT    = 15;     // 지각판 개수 스케일 업 (기존 6개 -> 15개)
-const OCEAN_H        = 0.43;   // 바다 임계값 (거대 노이즈와 결합하기 위해 약간 안정화 -> 더 높여 바다 비중 확대)
+const OCEAN_H        = 0.36;   // 바다 임계값 — 낮출수록 육지 비중 증가
 const LAND_H_COASTAL = 0.48;   // 해안 상한
 const LAND_H_PLAINS  = 0.58;   // 평야 상한
 const LAND_H_HIGH    = 0.70;   // 고원 상한
@@ -312,14 +312,14 @@ function computeHeight(
   const d = Math.sqrt(wx * wx + wy * wy) * 2.0; 
   
   // 외곽으로 갈수록 고도가 깎이는 양 (급격한 추락 방지, 노이즈와 결합해 섬/반도 형성)
-  const borderDrop = Math.pow(Math.max(0, d - 0.35), 2) * 1.2;
+  const borderDrop = Math.pow(Math.max(0, d - 0.28), 2) * 1.1; // 외곽 바다: 시작 거리 줄이고 계수 강화
 
   // 2. 대륙 단위 형성을 위한 초저주파 노이즈 (거대 대륙 및 부속 섬 분리)
   const continentNoise = fbm(heightNoise, nx * 2.0, ny * 2.0, 4); // -1 ~ 1
   
   // 3. 해안선을 찢어지게 만드는 프랙탈 노이즈 (피오르드,리아스식 해안)
   // 12000셀로 정밀도가 상향되었으므로 주파수와 진폭을 올려 훨씬 날카로운 프랙탈을 생성합니다.
-  const macroStr = fbm(heightNoise, nx * 8.0, ny * 8.0, 6) * 0.45;
+  const macroStr = fbm(heightNoise, nx * 8.0, ny * 8.0, 6) * 0.70; // 해안선 프랙탈 노이즈 진폭 강화 → 불규칙 해안
 
   // 4. 지각판(산맥) 기계적 스트레스 (Domain Warping 추가 적용)
   const warpX = fbm(heightNoise, nx * 3.5, ny * 3.5, 3) * 0.2;
@@ -336,7 +336,7 @@ function computeHeight(
   const detailStr = fbm(heightNoise, nx * 12.0, ny * 12.0, 6) * 0.15;
 
   // 해양판은 고도를 낮추고 대륙판은 높임
-  const basalH = plate.isOceanic ? 0.0 : 0.35; // 기본 고도 하향 (평야 중심 밸런싱)
+  const basalH = plate.isOceanic ? 0.0 : 0.45; // 대륙판 기본 고도 상향 → 육지 비중 확대
 
   // 6. 전체 합성 고도 계산 (합산 후 borderDrop으로 해안선 깎기)
   let raw = basalH + (continentNoise * 0.3) + macroStr + tectonicH + detailStr - borderDrop;
@@ -678,12 +678,12 @@ export function generateProvinces(
   function edgeCost(ha: number, hb: number): number {
     const h = Math.max(ha, hb);
     let base = 1.0;
-    if (h > LAND_H_MOUNT)  base = 25.0;  // 봉우리: 거의 넘을 수 없음
-    else if (h > LAND_H_HIGH)   base = 8.0;   // 산악: 높은 장벽
-    else if (h > LAND_H_PLAINS) base = 3.0;   // 고원: 중간 장벽
-    
+    if (h > LAND_H_MOUNT)  base = 5.0;  // 봉우리: 장벽 (25→5, 크기 균등화)
+    else if (h > LAND_H_HIGH)   base = 3.0;  // 산악
+    else if (h > LAND_H_PLAINS) base = 1.8;  // 고원
+
     // 자연스러운 영토 경계를 위해 이동 비용에 랜덤 노이즈 부여 (직선 형성 방지)
-    const noise = 0.7 + rand() * 0.6; 
+    const noise = 0.75 + rand() * 0.5;
     return base * noise;
   }
 
@@ -802,6 +802,47 @@ export function generateProvinces(
       moisture:    cellMoistures[s.mi],
     };
   });
+
+  // ── 10-b. 일부 Province를 중립(빈 땅)으로 전환 ────────────────────────────
+  // 수도는 유지, 산악/험지는 높은 확률, 일반 영지는 낮은 확률로 neutral 처리
+  // 단, 세력 영토의 연결성이 끊기는 Province는 neutral 전환 금지
+
+  // 세력별 수도 Province ID
+  const factionCapProv: Record<string, string> = {};
+  Object.entries(provinces).forEach(([id, p]) => {
+    if (p.isCapital) factionCapProv[p.owner] = id;
+  });
+
+  // BFS: Province excludeId를 제거했을 때 faction 영토가 여전히 연결되어 있는지 확인
+  const isFactionConnected = (faction: string, excludeId: string): boolean => {
+    const capId = factionCapProv[faction];
+    if (!capId || capId === excludeId) return false; // 수도가 제거되면 항상 분단
+    const factionIds = Object.keys(provinces).filter(id => provinces[id].owner === faction && id !== excludeId);
+    if (factionIds.length <= 1) return true; // 1개 이하면 분단 없음
+    const visited = new Set<string>([capId]);
+    const queue = [capId];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const adjId of provinces[cur].adjacentIds) {
+        if (!visited.has(adjId) && provinces[adjId]?.owner === faction && adjId !== excludeId) {
+          visited.add(adjId);
+          queue.push(adjId);
+        }
+      }
+    }
+    return factionIds.every(id => visited.has(id));
+  };
+
+  Object.keys(provinces).forEach(id => {
+    const p = provinces[id];
+    if (p.isCapital) return;
+    const isRough = p.terrainType === 'peak' || p.terrainType === 'mountain' || p.terrainType === 'ice';
+    const neutralChance = isRough ? 0.60 : 0.20;
+    if (rand() < neutralChance && isFactionConnected(p.owner, id)) {
+      provinces[id] = { ...p, owner: 'neutral' as any };
+    }
+  });
+  // ──────────────────────────────────────────────────────────────────────────
 
   // ── 11. allCells 구성 ────────────────────────────────────────────────────
   const vCellPolygons: ([number, number][] | null)[] = [];

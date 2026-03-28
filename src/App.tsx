@@ -4,7 +4,7 @@
 
 import { Stage, Container }        from '@pixi/react';
 import * as PIXI from 'pixi.js';
-import { useEffect, useCallback, useState, useRef } from 'react';
+import { useEffect, useCallback, useState, useRef, memo } from 'react';
 import TerrainMap       from './components/TerrainMap';
 import UnitsLayer       from './components/UnitsLayer';
 import MoveRangeLayer   from './components/MoveRangeLayer';
@@ -38,8 +38,23 @@ import EndingScreen      from './screens/EndingScreen';
 
 import './index.css';
 
+// ─── React.memo 래핑: camera 변경 시 불필요한 리렌더링 방지 ──────────────────
+// camera 는 BattleScreen local state → setCamera 60fps 호출 시 BattleScreen 재렌더링.
+// camera prop을 받지 않는 컴포넌트는 memo로 차단해서 Pixi/HTML 재조정 비용 제거.
+const MemoTerrainMap     = memo(TerrainMap);
+const MemoUnitsLayer     = memo(UnitsLayer);
+const MemoMoveRange      = memo(MoveRangeLayer);
+const MemoAttackRange    = memo(AttackRangeLayer);
+const MemoSkillRange     = memo(SkillRangeLayer);
+const MemoDynGrid        = memo(DynamicGridLayer);
+const MemoPath           = memo(PathLayer);
+const MemoObjective      = memo(ObjectiveLayer);
+const MemoMapObjects     = memo(MapObjectsLayer);
+const MemoFog            = memo(FogLayer);
+const MemoCloud          = memo(CloudShadow);
+
 // ─── 전투 로그 ─────────────────────────────────────────────────────────────
-function CombatLog() {
+const CombatLog = memo(function CombatLog() {
   const log = useGameStore(s => s.combatLog);
   if (!log.length) return null;
   return (
@@ -52,7 +67,7 @@ function CombatLog() {
       </div>
     </div>
   );
-}
+});
 
 // ─── HUD ──────────────────────────────────────────────────────────────────
 function TurnHUD({ onAbandonRequest }: { onAbandonRequest: () => void }) {
@@ -254,12 +269,20 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
     initUnits(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, attackerId, defenderId);
   }, [setBattleType, initUnits, pendingBattle, provinces]);
 
-  // 전장 타입 자동 진입 처리 (치트 모드)
+  // 전장 타입 자동 진입 처리
+  // - 치트 모드: cheat
+  // - 플레이어가 공격자(attackerProvinceId 소유): offensive
+  // - 플레이어가 수비자(defenderProvinceId 소유): defensive
   useEffect(() => {
-    if (isReady && !isStarted && pendingBattle?.isCheat) {
+    if (!isReady || isStarted || !pendingBattle) return;
+    if (pendingBattle.isCheat) {
       handleStartBattle('cheat');
+      return;
     }
-  }, [isReady, isStarted, pendingBattle, handleStartBattle]);
+    const attackerOwner = provinces[pendingBattle.attackerProvinceId]?.owner;
+    const autoType = attackerOwner === PLAYER_FACTION ? 'offensive' : 'defensive';
+    handleStartBattle(autoType);
+  }, [isReady, isStarted, pendingBattle, handleStartBattle, provinces]);
 
   // ─── 카메라 팬 & 줌 로직 ───
   // 화면 중앙에 전체 맵 너비(약 1920px)가 한눈에 보이도록 초기 배율 반응형 설정
@@ -297,6 +320,13 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   });
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
+  // 카메라 현재값 ref (scale 접근용, useEffect 동기화 없이 사용)
+  const cameraRef = useRef(camera);
+  // smooth pan 상태 — 별도 RAF 없이 기존 updateCamera 루프 안에서 처리
+  const panTargetRef   = useRef<{ x: number; y: number } | null>(null);
+  const panStartRef    = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const panStartTimeRef = useRef<number>(0);
+  const PAN_DURATION   = 500; // ms
 
   // 전투 진입 시 다이브 줌인 연출 (Lerp Animation)
   useEffect(() => {
@@ -359,6 +389,7 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (useGameStore.getState().isCameraLocked) return;
+    panTargetRef.current = null; // 드래그 시작 시 smooth pan 즉시 취소
     isDragging.current = true;
     lastPos.current = { x: e.clientX, y: e.clientY };
   }, []);
@@ -403,25 +434,33 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
     const updateCamera = (time: number) => {
       rafRef.current = requestAnimationFrame(updateCamera);
       if (useGameStore.getState().isCameraLocked) {
-        lastTime = time; 
+        lastTime = time;
         return;
       }
-      
+
       const dt = time - lastTime;
       lastTime = time;
+      if (dt > 100) return; // 탭 전환 등 비정상 dt 무시
 
-      // dt가 비정상적으로 크면 무시 (탭 전환 등)
-      if (dt > 100) return;
+      // ── smooth pan (별도 RAF 없이 이 루프에서 처리) ──────────────────
+      if (panTargetRef.current && !isDragging.current) {
+        const elapsed = time - panStartTimeRef.current;
+        const t = Math.min(elapsed / PAN_DURATION, 1);
+        const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        const nx = panStartRef.current.x + (panTargetRef.current.x - panStartRef.current.x) * ease;
+        const ny = panStartRef.current.y + (panTargetRef.current.y - panStartRef.current.y) * ease;
+        setCamera(prev => { cameraRef.current = { ...prev, x: nx, y: ny }; return clampCamera({ ...prev, x: nx, y: ny }); });
+        if (t >= 1) panTargetRef.current = null;
+        return; // smooth pan 중에는 WASD 입력 무시
+      }
 
-      const speed = 0.8 * dt; // 이동 속도 조정
+      // ── WASD 카메라 패닝 ──────────────────────────────────────────────
+      const speed = 0.8 * dt;
       let dx = 0; let dy = 0;
-
-      // W: 카메라 위로 이동 (화면의 월드는 아래로 내려가야 함 -> y 증가)
       if (keys.current['w'] || keys.current['arrowup'])    dy += speed;
       if (keys.current['s'] || keys.current['arrowdown'])  dy -= speed;
       if (keys.current['a'] || keys.current['arrowleft'])  dx += speed;
       if (keys.current['d'] || keys.current['arrowright']) dx -= speed;
-
       if (dx !== 0 || dy !== 0) {
         setCamera(prev => clampCamera({ ...prev, x: prev.x + dx, y: prev.y + dy }));
       }
@@ -436,7 +475,7 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
     };
   }, []);
 
-  // ─── 턴 시작 시 활성 유닛 또는 특수 목표 자동 카메라 포커스 ───
+  // ─── 턴 시작 시 활성 유닛 자동 카메라 포커스 ───
   const hasShownIntroRef = useRef(false);
 
   useEffect(() => {
@@ -444,63 +483,45 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
     const store = useGameStore.getState();
     const unit = store.units[activeUnitId];
     if (!unit) return;
-    
-    // 만약 첫 턴이고 위치 도달 목표(탈출)이며 아직 인트로 패닝을 안 보여줬다면
+
+    const scale = cameraRef.current.scale;
+    const angle = Math.PI / 4;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+
+    // isometric 좌표 → 화면 중앙 기준 카메라 목표 계산 헬퍼
+    const toDestXY = (lx: number, ly: number) => {
+      const wx = lx * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+      const wy = ly * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
+      const rx = wx * cosA - wy * sinA;
+      const ry = (wx * sinA + wy * cosA) * 0.5;
+      return { x: window.innerWidth / 2 - rx * scale, y: window.innerHeight / 2 - ry * scale };
+    };
+
+    // smooth pan 시작: panTargetRef를 세팅하면 updateCamera 루프가 처리
+    const startPan = (dest: { x: number; y: number }) => {
+      panStartRef.current    = { x: cameraRef.current.x, y: cameraRef.current.y };
+      panStartTimeRef.current = performance.now();
+      panTargetRef.current   = dest;
+    };
+
+    // 첫 턴 탈출 목표 인트로 패닝
     const v = store.victoryCondition;
     if (store.turnNumber === 1 && v?.type === 'REACH_LOCATION' && v.targetTile && !hasShownIntroRef.current) {
       hasShownIntroRef.current = true;
       store.setIsCameraLocked(true);
-
-      const tx = v.targetTile.lx * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-      const ty = v.targetTile.ly * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-      const angle = Math.PI / 4;
-      const rx = tx * Math.cos(angle) - ty * Math.sin(angle);
-      const ry = tx * Math.sin(angle) + ty * Math.cos(angle);
-      const ix = rx;
-      const iy = ry * 0.5;
-
-      setCamera(prev => clampCamera({
-        ...prev,
-        x: window.innerWidth / 2 - ix * prev.scale,
-        y: window.innerHeight / 2 - iy * prev.scale,
-      }));
-
-      // 1.5초 후 현재 턴을 가진 영웅에게 포커스를 맞추며 락 해제
+      startPan(toDestXY(v.targetTile.lx, v.targetTile.ly));
       setTimeout(() => {
-        const ux = unit.logicalX * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-        const uy = unit.logicalY * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-        const urx = ux * Math.cos(angle) - uy * Math.sin(angle);
-        const ury = ux * Math.sin(angle) + uy * Math.cos(angle);
-        
-        setCamera(prev => clampCamera({
-          ...prev,
-          x: window.innerWidth / 2 - urx * prev.scale,
-          y: window.innerHeight / 2 - (ury * 0.5) * prev.scale,
-        }));
-        
+        startPan(toDestXY(unit.logicalX, unit.logicalY));
         useGameStore.getState().setIsCameraLocked(false);
       }, 1500);
-
       return;
     }
 
-    // 그 외 일반적인 포커스 시퀀스
-    const worldX = unit.logicalX * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-    const worldY = unit.logicalY * MAP_CONFIG.TILE_SIZE + MAP_CONFIG.TILE_SIZE / 2;
-    const angle = Math.PI / 4;
-    const cosA = Math.cos(angle);
-    const sinA = Math.sin(angle);
-    const rx = worldX * cosA - worldY * sinA;
-    const ry = worldX * sinA + worldY * cosA;
-    const ix = rx * 1;
-    const iy = ry * 0.5;
-
-    setCamera(prev => clampCamera({
-      ...prev,
-      x: window.innerWidth / 2 - ix * prev.scale,
-      y: window.innerHeight / 2 - iy * prev.scale,
-    }));
+    // 일반 포커스
+    startPan(toDestXY(unit.logicalX, unit.logicalY));
   }, [activeUnitId]);
+
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -577,49 +598,31 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
                 useGameStore.getState().setHoveredMapPixel(null);
               }}
             >
-              <TerrainMap />
-              <MoveRangeLayer />
-              <AttackRangeLayer />
-              <SkillRangeLayer />
-              <DynamicGridLayer />
-              <PathLayer />
+              <MemoTerrainMap />
+              <MemoMoveRange />
+              <MemoAttackRange />
+              <MemoSkillRange />
+              <MemoDynGrid />
+              <MemoPath />
               
               {/* Entity Layout Nodes (Z-Index 기반 혼합 정렬됨) */}
-              <ObjectiveLayer />
-              <MapObjectsLayer />
-              <UnitsLayer />
+              <MemoObjective />
+              <MemoMapObjects />
+              <MemoUnitsLayer />
               
-              <FogLayer />
-              <CloudShadow />
+              <MemoFog />
+              <MemoCloud />
             </Container>
           </Container>
         </Container>
       </Stage>
 
-      {/* 전장 타입 선택 오버레이 */}
-      {isReady && !isStarted && !pendingBattle?.isCheat && (
-        <div className="absolute inset-0 flex items-center justify-center z-50">
-          <div className="bg-black/80 border border-gray-600 rounded-2xl p-10 flex flex-col items-center gap-6 shadow-2xl">
-            <h2 className="text-white text-3xl font-extrabold tracking-wide">⚔️ 전장 선택</h2>
-            <p className="text-gray-400 text-sm">배치 방식이 달라집니다</p>
-            <div className="flex gap-6 mt-2">
-              <button
-                onClick={() => handleStartBattle('defensive')}
-                className="flex flex-col items-center gap-2 bg-blue-900/80 border border-blue-500 hover:bg-blue-700/80 text-white px-8 py-5 rounded-xl transition-all cursor-pointer"
-              >
-                <span className="text-4xl">🛡</span>
-                <span className="font-bold text-lg">수비전</span>
-                <span className="text-xs text-blue-300 text-center max-w-[140px]">아군이 거점 주변 배치<br />적군은 맵 가장자리에서 침입</span>
-              </button>
-              <button
-                onClick={() => handleStartBattle('offensive')}
-                className="flex flex-col items-center gap-2 bg-red-900/80 border border-red-500 hover:bg-red-700/80 text-white px-8 py-5 rounded-xl transition-all cursor-pointer"
-              >
-                <span className="text-4xl">⚔️</span>
-                <span className="font-bold text-lg">공격전</span>
-                <span className="text-xs text-red-300 text-center max-w-[140px]">아군이 길목(좌측)에서 진격<br />적군은 거점 주변 방어</span>
-              </button>
-            </div>
+      {/* 전장 진입 로딩 오버레이 (자동 판별 중) */}
+      {isReady && !isStarted && (
+        <div className="absolute inset-0 flex items-center justify-center z-50 bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <span className="text-4xl animate-pulse">⚔️</span>
+            <span className="text-white text-xl font-bold tracking-widest">전장 준비 중...</span>
           </div>
         </div>
       )}

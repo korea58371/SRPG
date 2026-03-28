@@ -96,6 +96,22 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       return;
     }
 
+    // isPlayableTile이 허용하는 중앙 60% 구역의 실제 픽셀 경계 계산
+    // getTileDarkness 기준: dist(= Math.max(|nx-0.5|/cx, |ny-0.5|/cy)) <= 0.6 이면 이동 가능
+    // → 이동 가능 구역: cx * 0.6 기준으로 중앙에서 ±(mapWidth*0.6/2) 범위
+    const playableMargin = Math.floor(mapWidth * 0.2); // 외곽 20% 마진 (각 변에서)
+    const pMinX = playableMargin;
+    const pMaxX = mapWidth - 1 - playableMargin;
+    const pMinY = Math.floor(mapHeight * 0.2);
+    const pMaxY = mapHeight - 1 - Math.floor(mapHeight * 0.2);
+
+    // 적군 defensive 배치: isPlayableTile 구역의 좌/우 경계 부근
+    const enemyMargin = 2; // 이동 가능 구역 경계에서 여분 2칸 안쪽
+    const enemyLeft  = { minX: pMinX + enemyMargin, maxX: pMinX + enemyMargin + 5 };
+    const enemyRight = { minX: pMaxX - enemyMargin - 5, maxX: pMaxX - enemyMargin };
+    const enemyTop   = { minY: pMinY + enemyMargin, maxY: pMinY + enemyMargin + 5 };
+    const enemyBot   = { minY: pMaxY - enemyMargin - 5, maxY: pMaxY - enemyMargin };
+
     const totalUnits = UNIT_CONFIG.PLAYER_UNIT_COUNT + (UNIT_CONFIG.INITIAL_SPAWN_COUNT - UNIT_CONFIG.PLAYER_UNIT_COUNT);
     for (let i = 0; i < totalUnits; i++) {
       let lx = 0, ly = 0;
@@ -105,14 +121,28 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && i < 2);
 
       let tries = 0;
-      while (tries < 100) {
+      while (tries < 200) {
         if (battleType === 'defensive') {
           if (fId === PLAYER_FACTION) {
+            // 아군: 맵 중앙 ±2칸 범위 (원래 로직 유지)
             lx = Math.floor(mapWidth / 2) + Math.floor(Math.random() * 4) - 2;
             ly = Math.floor(mapHeight / 2) + Math.floor(Math.random() * 4) - 2;
           } else {
-            lx = Math.random() > 0.5 ? Math.floor(Math.random() * 5) : mapWidth - 1 - Math.floor(Math.random() * 5);
-            ly = Math.random() > 0.5 ? Math.floor(Math.random() * 5) : mapHeight - 1 - Math.floor(Math.random() * 5);
+            // 적군: isPlayableTile이 허용하는 경계 안쪽에서 4방향 중 랜덤으로 스폰
+            const side = Math.floor(Math.random() * 4);
+            if (side === 0) { // 왼쪽 경계
+              lx = enemyLeft.minX  + Math.floor(Math.random() * (enemyLeft.maxX  - enemyLeft.minX  + 1));
+              ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
+            } else if (side === 1) { // 오른쪽 경계
+              lx = enemyRight.minX + Math.floor(Math.random() * (enemyRight.maxX - enemyRight.minX + 1));
+              ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
+            } else if (side === 2) { // 위쪽 경계
+              lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
+              ly = enemyTop.minY   + Math.floor(Math.random() * (enemyTop.maxY   - enemyTop.minY   + 1));
+            } else { // 아래쪽 경계
+              lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
+              ly = enemyBot.minY   + Math.floor(Math.random() * (enemyBot.maxY   - enemyBot.minY   + 1));
+            }
           }
         } else {
           lx = Math.floor(Math.random() * mapWidth);
@@ -122,8 +152,10 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         const mapData = get().mapData;
         const terrain = mapData?.[ly]?.[lx] ?? TerrainType.GRASS;
         const validTerrain = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
+        // ✅ 핵심 수정: 지형 타입뿐만 아니라 이동 가능 구역(안개 없음)인지도 반드시 검사
+        const playable = isPlayableTile(lx, ly, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
         
-        if (validTerrain && !usedTiles.has(`${lx},${ly}`)) {
+        if (validTerrain && playable && !usedTiles.has(`${lx},${ly}`)) {
           usedTiles.add(`${lx},${ly}`);
           break;
         }
