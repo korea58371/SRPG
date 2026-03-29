@@ -48,8 +48,8 @@ export const useAppStore = create<StrategyState>((set, get) => ({
   goTo: (screen: AppScreen) => set({ screen }),
 
   // ─── 게임 시작 ──────────────────────────────────────────────────────────
-  startGame: () => {
-    const seed = Date.now();
+  startGame: (scenarioData?: { seed: number; factions: Record<string, string> }) => {
+    const seed = scenarioData ? scenarioData.seed : Date.now();
     const { provinces } = generateProvinces(1440, 820, seed);
     const diplomacyRelations: Record<string, DiplomacyRel> = {};
     const factionResources: Record<FactionId, FactionResource> = {};
@@ -58,6 +58,18 @@ export const useAppStore = create<StrategyState>((set, get) => ({
       if (fId !== PLAYER_FACTION) diplomacyRelations[fId] = 'war';
       factionResources[fId] = { gold: 1000, food: 2000, manpower: 500 };
     });
+
+    // If scenarioData is provided, override province owners
+    if (scenarioData && scenarioData.factions) {
+      Object.keys(provinces).forEach(provId => {
+        const scenarioOwner = scenarioData.factions[provId];
+        if (scenarioOwner && FACTIONS[scenarioOwner]) {
+          provinces[provId].owner = scenarioOwner as FactionId;
+        } else {
+          provinces[provId].owner = 'neutral';
+        }
+      });
+    }
 
     // 플레이어 수도 찾아 소속 영웅들 배치
     const playerCapital = Object.values(provinces).find(p => p.owner === PLAYER_FACTION && p.isCapital);
@@ -167,13 +179,29 @@ export const useAppStore = create<StrategyState>((set, get) => ({
 
   // ─── 전투 결과 처리 ──────────────────────────────────────────────────────
   resolveBattle: (outcome: BattleOutcome) => {
-    const { provinces, pendingBattle } = get();
+    const { provinces, pendingBattle, characters } = get();
     if (!pendingBattle) return;
+
+    const isWin = typeof outcome === 'string' ? outcome === 'player_win' : outcome.isVictory;
+    const survivingTroops = typeof outcome === 'object' ? outcome.survivingTroops : undefined;
 
     const { defenderProvinceId } = pendingBattle;
     let newProvinces = { ...provinces };
+    let newCharacters = { ...characters };
 
-    if (outcome === 'player_win') {
+    // 생존 병력(HP 역산결과) 업데이트
+    if (survivingTroops) {
+      for (const [charId, remainingCount] of Object.entries(survivingTroops)) {
+        if (newCharacters[charId]) {
+          newCharacters[charId] = {
+            ...newCharacters[charId],
+            troopCount: remainingCount
+          };
+        }
+      }
+    }
+
+    if (isWin) {
       const defender = newProvinces[defenderProvinceId];
       if (defender) {
         newProvinces = { ...newProvinces, [defenderProvinceId]: { ...defender, owner: PLAYER_FACTION } };
@@ -181,12 +209,13 @@ export const useAppStore = create<StrategyState>((set, get) => ({
     }
 
     if (pendingBattle.isCheat || Object.keys(newProvinces).length === 0) {
-      set({ pendingBattle: null, lastBattleOutcome: outcome, screen: 'BATTLE_RESULT', endingType: null });
+      set({ characters: newCharacters, pendingBattle: null, lastBattleOutcome: outcome, screen: 'BATTLE_RESULT', endingType: null });
       return;
     }
 
     const victory = checkVictory(newProvinces);
     set({
+      characters: newCharacters,
       provinces: newProvinces,
       pendingBattle: null,
       lastBattleOutcome: outcome,
@@ -313,6 +342,30 @@ export const useAppStore = create<StrategyState>((set, get) => ({
         ...characters,
         [charId]: { ...char, locationProvinceId: provinceId },
       },
+    });
+  },
+
+  // 출격 전 긴급 모병
+  quickRecruit: (charId) => {
+    const { characters, factionResources } = get();
+    const char = characters[charId];
+    if (!char || !char.factionId) return;
+
+    const res = factionResources[char.factionId];
+    if (!res || res.gold < 50) {
+      alert('금화가 부족합니다! (50G 필요)');
+      return;
+    }
+
+    set({
+      factionResources: {
+        ...factionResources,
+        [char.factionId]: { ...res, gold: res.gold - 50 }
+      },
+      characters: {
+        ...characters,
+        [charId]: { ...char, troopCount: (char.troopCount || 0) + 100 }
+      }
     });
   },
 }));

@@ -30,18 +30,32 @@ export interface Equipment {
 // 캐릭터 1차 기본 스탯 (모든 계산의 원천)
 // 전장 Unit 스탯, 내정 패시브 모두 이 값에서 동적 계산됨
 export interface CharacterBaseStats {
-  hp: number;           // 생존력 (Unit HP 기여)
-  strength: number;     // 무력  → 부대 공격력 가중, 장수 직접 전투력
-  intelligence: number; // 지력  → 부대 방어/마법 가중, 스킬 효과 계수
-  politics: number;     // 정치  → 내정 자원 생산 보너스 (%)
-  charisma: number;     // 통솔  → 최대 편제 병력, 치안 보너스, 징병 효율
-  speed: number;        // 속도  → 전장 행동 순서 (CT 시스템)
+  // --- 무력 계통 (Martial) ---
+  power: number;        // 힘 (개인 물리 공격력 및 타격 계수)
+  agility: number;      // 민첩 (기동성, 턴 보정, 회피율)
+  dexterity: number;    // 기술 (명중률, 치명타 확률, 무기 스킬 위력)
+  constitution: number; // 체력 (개인 순수 HP 기반 및 지구력)
+  magic: number;        // 마력 (마법 공격력, 최대 MP)
+  toughness: number;    // 방어 (개인 피해 감소 및 물리적 맷집)
+  
+  // --- 지휘 계통 (Command) ---
+  command: number;      // 지휘력 (전술 지휘: 부대 공격력, 치명타, 스킬 데미지, 진형 보너스)
+  leadership: number;   // 통솔력 (조직 장악: 최대 병력수 캡, 부대 방어력/HP, 사기 유지)
+
+  // --- 정신 및 내정 계통 (Mental & Civil) ---
+  intelligence: number; // 지력 (계략, 전투 스킬 보조, 전장 속임수)
+  politics: number;     // 정치 (영지 개발, 내정 보너스, 자원 펌핑)
+  charm: number;        // 매력 (외교, 협상, 무장 등용 성공률, 부대 사기)
 }
+
+// UI용 통합 스탯 (다각형 레이더 차트) 등 식별에 사용하는 타입
+export type CompositeStatType = 'Martial' | 'Command' | 'Leadership' | 'Scheme' | 'Politics' | 'Charm';
 
 export interface Character {
   id: string;
   name: string;
   portraitUrl?: string;  // 포트레이트 이미지 URL (없으면 컬러 아바타 폴백)
+  description?: string;  // 인물 열전 (개인 스토리 배경 설정)
 
   // ─ 신분 및 세력 ──────────────────────────────────────────────────
   state: CharacterState;

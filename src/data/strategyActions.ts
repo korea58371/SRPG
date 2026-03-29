@@ -255,8 +255,8 @@ export function buildActionItems(ctx: ActionContext): StrategyActionItem[] {
     });
   }
 
-  // 전체 내정 글로벌 버튼
-  if (!selectedProvince || selectedProvince.owner !== PLAYER_FACTION) {
+  // 전체 내정 글로벌 버튼 (영지 미선택 시에만 노출)
+  if (!selectedProvince) {
     const playerProvs = Object.values(allProvinces).filter(p => p.owner === PLAYER_FACTION);
     if (playerProvs.length > 0) {
       items.push({

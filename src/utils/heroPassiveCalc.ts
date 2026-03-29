@@ -12,18 +12,18 @@ import { HERO_FORMULA as F } from '../constants/heroFormula';
  * 계수 조정: constants/heroFormula.ts 참조
  */
 export function calcHeroPassive(char: Character): HeroPassiveEffect {
-  const { politics, charisma } = char.baseStats;
+  const { politics, charm } = char.baseStats;
   const troopCount = char.troopCount ?? 0;
 
   return {
     // 정치力 → 상업/농업 생산 보너스 (%)
-    productionBonus: Math.floor(politics * F.PASSIVE_PRODUCTION_PER_POLITICS),
+    productionBonus: Math.floor((politics || 0) * F.PASSIVE_PRODUCTION_PER_POLITICS),
 
-    // 통솔力 → 치안 수치 (절대값)
-    securityBonus: Math.floor(charisma * F.PASSIVE_SECURITY_PER_CHARISMA),
+    // 매력(charm) → 치안 수치 (절대값)
+    securityBonus: Math.floor((charm || 0) * F.PASSIVE_SECURITY_PER_CHARM),
 
-    // 통솔力 → 모병 효율 보너스 (%)
-    recruitmentBonus: Math.floor(charisma * F.PASSIVE_RECRUIT_PER_CHARISMA),
+    // 매력(charm) → 모병 효율 보너스 (%)
+    recruitmentBonus: Math.floor((charm || 0) * F.PASSIVE_RECRUIT_PER_CHARM),
 
     // 편제 병력 규모 → 식량 소모 배율
     // 병력 1000명당 기본 소모의 +20% 추가 부담
@@ -36,5 +36,5 @@ export function calcHeroPassive(char: Character): HeroPassiveEffect {
  * 영웅의 현재 최대 편제 가능 병력 계산 (통솔 기반)
  */
 export function calcMaxTroopCount(char: Character): number {
-  return Math.floor(char.baseStats.charisma * F.MAX_TROOP_PER_CHARISMA);
+  return Math.floor((char.baseStats.leadership || 0) * F.MAX_TROOP_PER_LEADERSHIP);
 }

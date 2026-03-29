@@ -40,15 +40,20 @@ export function isEventTriggered(
 }
 
 // ─── 전체 이벤트 풀에서 현재 컨텍스트에 맞는 이벤트 목록 반환 ──────────────
-// 우선순위: once=true가 once=false보다 먼저 (1회성 이벤트가 더 중요)
+// 정렬 기준: 1) priority 내림차순 (높은 우선도 먼저)
+//           2) once=true 먼저 (세밀한 조건의 1회성 이벤트 우선)
 export function getTriggeredEvents(
   events: DialogueEvent[],
   ctx: TriggerContext,
 ): DialogueEvent[] {
   const triggered = events.filter((ev) => isEventTriggered(ev, ctx));
 
-  // once=true 이벤트 우선 정렬
   return triggered.sort((a, b) => {
+    // 1. priority 내림차순
+    const pa = a.priority ?? 0;
+    const pb = b.priority ?? 0;
+    if (pb !== pa) return pb - pa;
+    // 2. once=true 우선
     if (a.once && !b.once) return -1;
     if (!a.once && b.once) return 1;
     return 0;

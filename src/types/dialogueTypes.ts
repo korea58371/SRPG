@@ -25,7 +25,17 @@ export type BattleTriggerEvent =
   | 'HP_THRESHOLD'      // HP가 특정 % 이하로 하락
   | 'FIRST_ENGAGEMENT'  // 대상 vs 대상 첫 교전
   | 'BATTLE_START'      // 전투 시작 (첫 출진)
+  | 'BEFORE_ATTACK'     // 공격 직전 (행동 확정 시)
+  | 'AFTER_ATTACK'      // 공격 직후 (데미지 처리 완료)
+  | 'ON_KILL'           // 적을 처치하는 순간
   | 'SKILL_USED';       // 특정 스킬 사용
+
+// ─── 전투 내 발화 페이즈 (같은 유닛 턴 내 시점 구분) ────────────────────────
+export type BattlePhase =
+  | 'TURN_START'    // 차례가 오는 순간
+  | 'BEFORE_ATTACK' // 공격/스킬 확정 직전
+  | 'AFTER_ATTACK'  // 공격/스킬 결과 직후
+  | 'ON_KILL';      // 적 처치 확인 직후
 
 // ─── 트리거 평가에 사용되는 컨텍스트 스냅샷 ────────────────────────────────
 export interface TriggerContext {
@@ -88,7 +98,16 @@ export interface DialogueEvent {
   trigger: DialogueTrigger;
   once: boolean;                  // true: 1회만 발동, false: 매번 발동 가능
   lines: DialogueLine[];
+  priority?: number;              // 높을수록 같은 시점 이벤트 중 우선 발동 (기본값: 0)
+  battlePhase?: BattlePhase;      // 발화 시점 구분 (BATTLE 컨텍스트 전용)
+  reactToUnitId?: string;         // 이 unitId가 처치당했을 때 반응 (ALLY_DEFEATED/ENEMY_DEFEATED용)
   onComplete?: () => void;        // 대사 완료 후 콜백 (선택, 직렬화 불가)
+}
+
+// ─── 큐 항목 타입 ─────────────────────────────────────────────────────────────
+export interface DialogueQueueItem {
+  event: DialogueEvent;
+  anchor?: { x: number; y: number };
 }
 
 // ─── Zustand Slice 상태 타입 ──────────────────────────────────────────────────
@@ -99,10 +118,14 @@ export interface DialogueSliceState {
 
   // 전투용 말풍선 위치 (유닛 포트레이트 토큰 화면 좌표)
   bubbleAnchor: { x: number; y: number } | null;
+
+  // 대기 큐 — 연속 이벤트(예: ON_KILL 발화자 → 동료 반응) 순서 보장
+  dialogueQueue: DialogueQueueItem[];
 }
 
 export interface DialogueSliceActions {
   triggerDialogue: (event: DialogueEvent, anchor?: { x: number; y: number }) => void;
+  enqueueDialogue: (event: DialogueEvent, anchor?: { x: number; y: number }) => void; // 현재 진행 중이면 큐에 추가
   advanceLine: () => void;   // 유저 클릭 → 다음 줄 또는 종료
   closeDialogue: () => void;
   setBubbleAnchor: (anchor: { x: number; y: number } | null) => void;

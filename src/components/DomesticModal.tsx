@@ -117,25 +117,25 @@ export default function DomesticModal({ menu, onClose }: Props) {
             </span>
           )}
         </div>
-        <div className="text-xs text-slate-500 text-right">
-          <div>무{char.baseStats.strength} 지{char.baseStats.intelligence}</div>
-          <div>정{char.baseStats.politics} 통{char.baseStats.charisma}</div>
+        <div className="text-[10px] text-slate-500 text-right space-y-0.5">
+          <div className="flex gap-2 justify-end">
+            <span className="text-orange-300">통솔 <span className="font-bold text-white">{Math.round(char.baseStats.command * 0.6 + char.baseStats.leadership * 0.4)}</span></span>
+            <span className="text-red-300">무력 <span className="font-bold text-white">{Math.round(char.baseStats.power * 0.5 + char.baseStats.agility * 0.2 + char.baseStats.toughness * 0.15 + char.baseStats.constitution * 0.15)}</span></span>
+            <span className="text-blue-300">지략 <span className="font-bold text-white">{char.baseStats.intelligence}</span></span>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <span className="text-purple-300">정치 <span className="font-bold text-white">{char.baseStats.politics}</span></span>
+            <span className="text-pink-300">매력 <span className="font-bold text-white">{char.baseStats.charm}</span></span>
+          </div>
         </div>
       </div>
-      {/* 스탯 미니 바 */}
-      <div className="mt-2 space-y-0.5">
-        {[
-          { label: '무', val: char.baseStats.strength, color: 'bg-red-500' },
-          { label: '지', val: char.baseStats.intelligence, color: 'bg-blue-500' },
-          { label: '정', val: char.baseStats.politics, color: 'bg-green-500' },
-        ].map(({ label, val, color }) => (
-          <div key={label} className="flex items-center gap-1">
-            <span className="text-[10px] text-slate-500 w-3">{label}</span>
-            <div className="flex-1 h-1 bg-slate-700 rounded-full overflow-hidden">
-              <div className={`h-full ${color} rounded-full`} style={statBarStyle(val)} />
-            </div>
-          </div>
-        ))}
+      {/* 5대 스탯 진행 바 */}
+      <div className="mt-3 flex overflow-hidden rounded-full h-1.5 bg-slate-800 gap-0.5 border border-slate-700/50">
+        <div className="bg-orange-500" style={statBarStyle(char.baseStats.command * 0.6 + char.baseStats.leadership * 0.4)} />
+        <div className="bg-red-500" style={statBarStyle(char.baseStats.power * 0.5 + char.baseStats.agility * 0.2 + char.baseStats.toughness * 0.15 + char.baseStats.constitution * 0.15)} />
+        <div className="bg-blue-500" style={statBarStyle(char.baseStats.intelligence)} />
+        <div className="bg-purple-500" style={statBarStyle(char.baseStats.politics)} />
+        <div className="bg-pink-500" style={statBarStyle(char.baseStats.charm)} />
       </div>
     </button>
   );

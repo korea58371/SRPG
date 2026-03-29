@@ -7,6 +7,8 @@ export const TerrainType = {
   CLIFF: 3,
   PATH: 4,
   FOREST: 5,
+  DESERT: 6,
+  SNOW: 7,
 } as const;
 
 export type TerrainType = typeof TerrainType[keyof typeof TerrainType];
@@ -125,12 +127,13 @@ export interface Unit {
 
   isHero: boolean;
   characterId?: string;  // 연결된 Character ID (포트레이트 조회용)
+  name?: string;         // 전투 UI에 렌더링될 실제 이름
 
-  // ─ 장수(General) 전용 능력치 (unitType === 'GENERAL' 일 때만 유효) ──
-  generalStrength?: number;     // 武力: 지휘 범위 내 병종 공격 +
-  generalIntelligence?: number; // 知力: 지휘 범위 내 병종 방어 +
-  generalPolitics?: number;     // 政治: 지휘 범위 내 병종 HP 보너스
-  generalCharisma?: number;     // 統率: 지휘 반경 (타일 수)
+  // ─ 장수(General) 전용 전술 오라 능력치 ─────────────────────────
+  generalPower?: number;        // 힘(Power): 지휘 범위 내 물리 공격력 보너스
+  generalCommand?: number;      // 지휘(Command): 지휘 범위 내 전술/치명타 보너스
+  generalLeadership?: number;   // 통솔(Leadership): 지휘 반경 (타일 수) 및 통솔 오라 방어력 보너스
+  generalIntelligence?: number; // 지력(Intelligence): 지휘 범위 내 마법/계략 보너스
 
   // ─ 장수 내정 전용 능력치 ──────────────────────────────────────
   raceEffects?: HeroPassiveEffect;   // 종족 기반 기본 패시브

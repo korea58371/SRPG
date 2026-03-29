@@ -1,7 +1,7 @@
 import type { StoreSlice, GameStateSlice } from './storeTypes';
 import { TerrainType } from '../../types/gameTypes';
 import type { Unit, UnitType, LevelObjective } from '../../types/gameTypes';
-import { UNIT_CONFIG, BASE_STATS, PLAYER_FACTION, MAP_CONFIG, isPlayableTile } from '../../constants/gameConfig';
+import { MAP_CONFIG, UNIT_CONFIG, PLAYER_FACTION, isPlayableTile, BASE_STATS, TROOP_SKILLS } from '../../constants/gameConfig';
 import { tileToPixel } from '../gameStore'; // Helper functions from Root store wrapper
 import { useAppStore } from '../appStore';
 
@@ -78,9 +78,13 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         const typeE = getRandomType();
         const baseE = BASE_STATS[typeE] || BASE_STATS.INFANTRY;
 
-        const pLx = cx - 2; const pLy = cy - 4 + i;
-        const eLx = cx + 2; const eLy = cy - 4 + i;
-        usedTiles.add(`${pLx},${pLy}`); usedTiles.add(`${eLx},${eLy}`);
+        const pFallback = findNearestValidTile(cx - 2, cy - 4 + i);
+        const pLx = pFallback.lx; const pLy = pFallback.ly;
+        usedTiles.add(`${pLx},${pLy}`);
+        
+        const eFallback = findNearestValidTile(cx + 2, cy - 4 + i);
+        const eLx = eFallback.lx; const eLy = eFallback.ly;
+        usedTiles.add(`${eLx},${eLy}`);
 
         newUnits[`unit-p-${i}`] = {
           id: `unit-p-${i}`, factionId: attacker, unitType: typeP,
@@ -136,11 +140,15 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
     const characters = appStoreState.characters;
     const deployingHeroIds = appStoreState.pendingBattle?.deployingHeroIds || [];
 
-    const totalUnits = UNIT_CONFIG.PLAYER_UNIT_COUNT + (UNIT_CONFIG.INITIAL_SPAWN_COUNT - UNIT_CONFIG.PLAYER_UNIT_COUNT);
+    // 출격 시 세팅된 영웅 숫자로만 구성 (미세팅 시 0명이 되어 패배 처리되도록 엄격화)
+    const playerUnitCount = deployingHeroIds.length;
+    const enemyUnitCount = UNIT_CONFIG.ENEMY_UNIT_COUNT;
+    const totalUnits = playerUnitCount + enemyUnitCount;
+
     for (let i = 0; i < totalUnits; i++) {
       let lx = 0, ly = 0;
       let isHero = false;
-      const isPlayer = i < UNIT_CONFIG.PLAYER_UNIT_COUNT;
+      const isPlayer = i < playerUnitCount;
       const fId = isPlayer ? attacker : defender;
 
       let characterData = null;
@@ -148,35 +156,32 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         characterData = characters[deployingHeroIds[i]];
         isHero = true;
       } else {
-        isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && i < 2);
+        isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && (i - playerUnitCount) < 2);
       }
 
       let tries = 0;
       let found = false;
       while (tries < 200) {
-        if (battleType === 'defensive') {
-          if (fId === PLAYER_FACTION) {
-            lx = Math.floor(mapWidth / 2) + Math.floor(Math.random() * 4) - 2;
-            ly = Math.floor(mapHeight / 2) + Math.floor(Math.random() * 4) - 2;
-          } else {
-            const side = Math.floor(Math.random() * 4);
-            if (side === 0) {
-              lx = enemyLeft.minX  + Math.floor(Math.random() * (enemyLeft.maxX  - enemyLeft.minX  + 1));
-              ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-            } else if (side === 1) {
-              lx = enemyRight.minX + Math.floor(Math.random() * (enemyRight.maxX - enemyRight.minX + 1));
-              ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-            } else if (side === 2) {
-              lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
-              ly = enemyTop.minY   + Math.floor(Math.random() * (enemyTop.maxY   - enemyTop.minY   + 1));
-            } else {
-              lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
-              ly = enemyBot.minY   + Math.floor(Math.random() * (enemyBot.maxY   - enemyBot.minY   + 1));
-            }
-          }
+        const isCenterSpawn = (battleType === 'defensive' && fId === PLAYER_FACTION) || (battleType === 'offensive' && fId !== PLAYER_FACTION);
+
+        if (isCenterSpawn) {
+          lx = Math.floor(mapWidth / 2) + Math.floor(Math.random() * 6) - 3;
+          ly = Math.floor(mapHeight / 2) + Math.floor(Math.random() * 6) - 3;
         } else {
-          lx = Math.floor(Math.random() * mapWidth);
-          ly = Math.floor(Math.random() * mapHeight);
+          const side = Math.floor(Math.random() * 4);
+          if (side === 0) {
+            lx = enemyLeft.minX  + Math.floor(Math.random() * (enemyLeft.maxX  - enemyLeft.minX  + 1));
+            ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
+          } else if (side === 1) {
+            lx = enemyRight.minX + Math.floor(Math.random() * (enemyRight.maxX - enemyRight.minX + 1));
+            ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
+          } else if (side === 2) {
+            lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
+            ly = enemyTop.minY   + Math.floor(Math.random() * (enemyTop.maxY   - enemyTop.minY   + 1));
+          } else {
+            lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
+            ly = enemyBot.minY   + Math.floor(Math.random() * (enemyBot.maxY   - enemyBot.minY   + 1));
+          }
         }
 
         const mapData = get().mapData;
@@ -210,7 +215,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       let speedVal = 0;
       let moveStepsVal = 3;
       let attackRangeVal = 1;
-      let generalCharisma, generalStrength, generalIntelligence;
+      let generalPower, generalCommand, generalLeadership, generalIntelligence;
       let charIdAttr: { characterId?: string } = {};
 
       if (characterData) {
@@ -220,19 +225,20 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         // 편제 병력 수 기반 HP
         baseHp = (characterData.troopCount ?? st.hp) * 1.5; 
         
-        // 장수 능력치 기반 추가 보정 (무력->공격, 지력->방어)
-        attackVal = st.attack * (1 + characterData.baseStats.strength / 40);
-        defenseVal = st.defense * (1 + characterData.baseStats.intelligence / 40);
-        speedVal = st.speed;
+        // 장수 능력치 기반 추가 보정 (가라 스탯 부여)
+        attackVal = st.attack * (1 + characterData.baseStats.power / 40);
+        defenseVal = st.defense * (1 + characterData.baseStats.toughness / 40);
+        speedVal = characterData.baseStats.agility; // 속도를 민첩으로 대체
         moveStepsVal = st.moveSteps;
         attackRangeVal = st.attackRange;
-        generalCharisma = characterData.baseStats.charisma / 10;
-        generalStrength = characterData.baseStats.strength / 10;
+        generalPower = characterData.baseStats.power / 10;
+        generalCommand = characterData.baseStats.command / 10;
+        generalLeadership = characterData.baseStats.leadership / 10;
         generalIntelligence = characterData.baseStats.intelligence / 10;
         
         charIdAttr = { characterId: characterData.id };
       } else {
-        const isGeneral = i === 0 || i === UNIT_CONFIG.PLAYER_UNIT_COUNT;
+        const isGeneral = i === 0 || i === playerUnitCount;
         type = isGeneral ? 'GENERAL' : getRandomType();
         const stats = isGeneral ? BASE_STATS.GENERAL : BASE_STATS[type];
         baseHp = stats.hp * (isHero ? 2 : 1);
@@ -243,7 +249,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         attackRangeVal = stats.attackRange;
         
         if (isGeneral) {
-          generalCharisma = 3; generalStrength = 8; generalIntelligence = 8;
+          generalPower = 8; generalCommand = 8; generalIntelligence = 8; generalLeadership = 3;
         }
         
         if (i === 0 && fId === attacker && !deployingHeroIds.length) {
@@ -256,6 +262,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       
       newUnits[id] = {
         id,
+        name: characterData?.name,
         factionId: fId,
         unitType: type,
         hp: baseHp, maxHp: baseHp,
@@ -263,14 +270,17 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         speed: speedVal, moveSteps: moveStepsVal, attackRange: attackRangeVal,
         hasActed: false,
         mp: 100, maxMp: 100, rage: 0, morale: 100,
-        skills: isHero ? ['mock-cross', 'mock-line', 'mock-cone', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-aoe-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'] : ['mock-single', 'mock-radius', 'mock-push', 'mock-pull', 'mock-teleport-react', 'mock-heal', 'mock-buff-atk', 'mock-debuff-def', 'mock-poison', 'mock-regen'], 
+        skills: [...new Set([
+          ...(TROOP_SKILLS[type] || []),
+          ...(characterData?.skills || [])
+        ])],
         skillCooldowns: {}, skillCharges: {},
         state: 'IDLE',
         logicalX: lx, logicalY: ly,
         x: px, y: py,
         targetX: px, targetY: py,
         movePath: [],
-        generalCharisma, generalStrength, generalIntelligence,
+        generalPower, generalCommand, generalLeadership, generalIntelligence,
         isHero,
         ...charIdAttr,
       };

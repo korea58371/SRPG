@@ -12,13 +12,14 @@ export type AppScreen =
   | 'STRATEGY_TURN'
   | 'BATTLE'
   | 'BATTLE_RESULT'
-  | 'ENDING';
+  | 'ENDING'
+  | 'MAP_EDITOR';
 
 // ─── 엔딩 종류 ───────────────────────────────────────────────────────────────
 export type EndingType = 'good' | 'bad';
 
 // ─── 전투 결과 ───────────────────────────────────────────────────────────────
-export type BattleOutcome = 'player_win' | 'player_lose' | { isVictory: boolean; turn?: number; survivorCount?: number; };
+export type BattleOutcome = 'player_win' | 'player_lose' | { isVictory: boolean; turn?: number; survivorCount?: number; survivingTroops?: Record<string, number> };
 
 // ─── 팩션 전역 자원 ────────────────────────────────────────────────────────
 export interface FactionResource {
@@ -115,7 +116,7 @@ export interface StrategyState {
 
   // Actions
   goTo: (screen: AppScreen) => void;
-  startGame: () => void;
+  startGame: (scenarioData?: { seed: number; factions: Record<string, string> }) => void;
   selectProvince: (id: string | null) => void;
   executeDomestic: (provinceId: string) => void;
   executeDiplomacy: (targetFactionId: string) => void;
@@ -132,4 +133,5 @@ export interface StrategyState {
   recruitCharacter: (charId: string, targetFactionId: FactionId, locationProvinceId: string) => void;
   updateCharacterTroop: (charId: string, troopType: Character['troopType'], troopCount: number) => void;
   moveCharacter: (charId: string, provinceId: string) => void;
+  quickRecruit: (charId: string) => void;
 }

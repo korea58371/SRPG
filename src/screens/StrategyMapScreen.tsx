@@ -639,6 +639,18 @@ export const StrategyMapScreen = () => {
       }
       g.endFill();
     }
+
+    // ── 3. Pass 3: 내해 셀 재덮기 ─────────────────────────────────────────
+    // Province polygon이 내해(바다 셀)를 감싸서 세력 색으로 칠했을 경우, 바다 색으로 복원
+    g.lineStyle(0);
+    for (let i = 0; i < parsedCells.length; i++) {
+      const c = parsedCells[i];
+      if (!c.isOcean) continue;
+      const d = Math.max(0, Math.min(4, c.depth));
+      g.beginFill(OCEAN_GRAD[d], 1);
+      g.drawPolygon(c.polygon);
+      g.endFill();
+    }
   }, [parsedCells, provincePolygons, mapMode, selectedProvinceId, activeProvinces]);
 
   // 1-3. 바다 depth 등고선 경계선 (별도 레이어 alpha로 투명도 조절 → 내부 겹침 방지)

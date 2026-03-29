@@ -7,33 +7,35 @@
  */
 export const HERO_FORMULA = {
 
-  // ─ 전장 Unit 생성 계수 ───────────────────────────────────────────────
-  // HP = 영웅hp * HP_BASE_MULTIPLIER + floor(병력수 * 병종기본HP / HP_TROOP_DIVISOR)
-  HP_BASE_MULTIPLIER:           5,
-  HP_TROOP_DIVISOR:             100,
+  // ─ 2차 계수 (장수 개인 스탯 변환) ──────────────────────────────────
+  HP_PERSONAL_BETA: 5.0,    // 체력(constitution) * 5 = 개인 HP
+  ATK_PERSONAL_BETA: 1.0,   // 힘(power) * 1.0 = 개인 공격력
+  DEF_PERSONAL_BETA: 1.0,   // 방어(toughness) * 1.0 = 개인 방어력
 
-  // 공격력 = floor(무력 * ATK_STRENGTH_FACTOR + 병종기본공격 + 병력수 * ATK_TROOP_FACTOR)
-  ATK_STRENGTH_FACTOR:          0.6,
-  ATK_TROOP_FACTOR:             0.05,
+  // ─ 3차 계수 (지휘/통솔 부대 배율 보너스) ───────────────────────────
+  // 지휘력(command)은 전술 효율(공격)에, 통솔력(leadership)은 조직 유지(방어/체력)에 관여
+  COMMAND_ATK_MULTIPLIER_BETA: 0.01,    // 지휘력 1당 부대 공격 배율 1% 증가 (100이면 1.0 추가 = 200%)
+  LEADERSHIP_DEF_MULTIPLIER_BETA: 0.01, // 통솔력 1당 부대 방어/HP 배율 1% 증가
 
-  // 방어력 = floor(지력 * DEF_INTELLIGENCE_FACTOR + 병종기본방어)
-  DEF_INTELLIGENCE_FACTOR:      0.4,
+  // 병력 비례 기본 적용 비율
+  TROOP_HP_WEIGHT: 1.0,    // 병력수의 비율을 HP에 반영 (가장 다이나믹)
+  TROOP_ATK_WEIGHT: 0.02,  // 밸런스 계수 (병력이 공격/방어 수치에 미치는 비중 완화)
+  TROOP_DEF_WEIGHT: 0.02,
 
-  // ─ 내정 패시브 계산 계수 ────────────────────────────────────────────
+  // ─ 내정/전략 패시브 보너스 ──────────────────────────────────────────
   // 자원 생산 보너스 (%) = politics * PASSIVE_PRODUCTION_PER_POLITICS
   PASSIVE_PRODUCTION_PER_POLITICS:  0.5,
 
-  // 치안 보너스 = charisma * PASSIVE_SECURITY_PER_CHARISMA
-  PASSIVE_SECURITY_PER_CHARISMA:    0.3,
+  // 치안 보너스 = charm * PASSIVE_SECURITY_PER_CHARM
+  PASSIVE_SECURITY_PER_CHARM:       0.3,
 
-  // 징병 보너스 (%) = charisma * PASSIVE_RECRUIT_PER_CHARISMA
-  PASSIVE_RECRUIT_PER_CHARISMA:     0.5,
+  // 징병 보너스 (%) = charm * PASSIVE_RECRUIT_PER_CHARM
+  PASSIVE_RECRUIT_PER_CHARM:        0.5,
 
-  // 최대 편제 병력 = charisma * MAX_TROOP_PER_CHARISMA
-  MAX_TROOP_PER_CHARISMA:           10,
+  // 최대 편제 병력 = leadership * MAX_TROOP_PER_LEADERSHIP
+  MAX_TROOP_PER_LEADERSHIP:         100, // 통솔 1당 병력 100명 한도 (예: 100이면 1만 명)
 
-  // 식량 소모 배율 기본값 (1.0 = 100%)
-  // 실계산: 1.0 + (troopCount / 1000) * FOOD_CONSUMPTION_PER_1000_TROOP
+  // 식량 소모 배율
   FOOD_CONSUMPTION_PER_1000_TROOP:  0.2,
 
 } as const;

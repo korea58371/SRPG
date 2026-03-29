@@ -29,6 +29,7 @@ import { getTurnOrder } from '../store/slices/turnSystemSlice';
 import { MOCK_SKILLS, getAoETiles, getManhattanDist } from '../utils/skillTargeting';
 import { getEffectiveStat } from '../engine/statEngine';
 
+
 const MOVE_SPEED = 6;
 
 // ─── 레이아웃 상수 ────────────────────────────────────────────────────────
@@ -549,6 +550,40 @@ export function UnitSprite({ id }: { id: string }) {
   );
 }
 
+// ─── 말풍선 앵커 동기화 컴포넌트 (PixiJS useTick 기반) ──────────────────────
+// 대화가 활성화된 동안 발화 유닛의 현재 화면 픽셀 좌표를 매 프레임 추적하여
+// dialogueSlice.setBubbleAnchor에 반영합니다.
+function BubbleAnchorSync() {
+  const activeDialogue  = useGameStore(s => s.activeDialogue);
+  const setBubbleAnchor = useGameStore(s => s.setBubbleAnchor);
+
+  useTick(() => {
+    if (!activeDialogue) return;
+
+    const state = useGameStore.getState();
+    const speakerId = state.activeDialogue?.lines[state.currentLineIndex]?.speakerId;
+    if (!speakerId || speakerId === 'NARRATOR') return;
+
+    // speakerId는 characterId이므로 유닛 중 characterId 매칭 검색
+    const unit = Object.values(state.units).find(
+      u => u.characterId === speakerId && u.state !== 'DEAD'
+    );
+    if (!unit) return;
+
+    // 유닛 현재 화면 위치 추적 (logicalX/Y 기준 → 픽셀)
+    // 이동 중에는 unit.x/y가 실제 렌더 좌표와 맞음
+    const screenX = unit.x;
+    const screenY = unit.y - 20; // 토큰 상단 여백
+
+    // 이전 앵커와 같으면 업데이트 스킵 (불필요한 리렌더 방지)
+    const prevAnchor = state.bubbleAnchor;
+    if (prevAnchor && Math.abs(prevAnchor.x - screenX) < 1 && Math.abs(prevAnchor.y - screenY) < 1) return;
+
+    setBubbleAnchor({ x: screenX, y: screenY });
+  });
+
+  return null;
+}
 
 export default function UnitsLayer() {
   const unitIds = useGameStore(useShallow(s =>
@@ -557,6 +592,7 @@ export default function UnitsLayer() {
 
   return (
     <>
+      <BubbleAnchorSync />
       {unitIds.map(id => (
         <UnitSprite key={id} id={id} />
       ))}

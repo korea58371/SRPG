@@ -59,10 +59,10 @@ export default function UnitInfoPanel() {
   const unit = units[displayId];
   if (!unit || unit.state === 'DEAD') return null;
 
-  const faction   = FACTIONS[unit.factionId];
+  const faction   = FACTIONS[unit.factionId] || { id: unit.factionId, name: unit.factionId || 'Unknown', color: 0x999999 };
   const isPlayer  = unit.factionId === PLAYER_FACTION;
   const icon      = UNIT_ICONS[unit.unitType] ?? '?';
-  const name      = UNIT_TYPE_KR[unit.unitType] ?? unit.unitType;
+  const name      = unit.name || (UNIT_TYPE_KR[unit.unitType] ?? unit.unitType);
   // 번호 형태의 색상을 CSS HEX로 변환
   const hexColor  = typeof faction.color === 'number' ? '#' + faction.color.toString(16).padStart(6, '0') : '#fff';
   const accentCls = isPlayer ? 'text-blue-300' : 'text-red-300';
@@ -133,10 +133,10 @@ export default function UnitInfoPanel() {
               {/* 장수 능력치 표시 */}
               {unit.unitType === 'GENERAL' && (
                 <div className="flex gap-1 flex-wrap mt-1">
-                  <span className="text-[9px] bg-orange-900/40 text-orange-300 rounded px-1 py-0.5">武{unit.generalStrength}</span>
-                  <span className="text-[9px] bg-purple-900/40 text-purple-300 rounded px-1 py-0.5">知{unit.generalIntelligence}</span>
-                  <span className="text-[9px] bg-green-900/40 text-green-300 rounded px-1 py-0.5">政{unit.generalPolitics}</span>
-                  <span className="text-[9px] bg-blue-900/40 text-blue-300 rounded px-1 py-0.5">統{unit.generalCharisma}타일</span>
+                  <span className="text-[9px] bg-orange-900/40 text-orange-300 rounded px-1 py-0.5">지휘{unit.generalCommand}</span>
+                  <span className="text-[9px] bg-purple-900/40 text-purple-300 rounded px-1 py-0.5">지력{unit.generalIntelligence}</span>
+                  <span className="text-[9px] bg-red-900/40 text-red-300 rounded px-1 py-0.5">무력{unit.generalPower}</span>
+                  <span className="text-[9px] bg-blue-900/40 text-blue-300 rounded px-1 py-0.5">통솔{unit.generalLeadership}타일</span>
                 </div>
               )}
               {/* 활성화된 상태 이상 뱃지 (Buffs/Debuffs) */}

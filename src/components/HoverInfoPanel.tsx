@@ -12,6 +12,8 @@ const terrainNameMap: Record<TerrainType, string> = {
   [TerrainType.BEACH]: '모래사장',
   [TerrainType.SEA]: '바다',
   [TerrainType.FOREST]: '숲',
+  [TerrainType.DESERT]: '사막',
+  [TerrainType.SNOW]: '설원',
 };
 
 function DamagePreviewHpBar({ hp, maxHp, expectedDamage }: { hp: number; maxHp: number; expectedDamage?: number }) {

@@ -27,6 +27,7 @@ import BattleAbandonModal from './components/BattleAbandonModal';
 import { useGameStore } from './store/gameStore';
 import { useAppStore }  from './store/appStore';
 import { useInteractionManager } from './hooks/useInteractionManager';
+import { useBattleDialogueTrigger } from './hooks/useBattleDialogueTrigger';
 import { generateMapData } from './utils/mapGenerator';
 import { MAP_CONFIG, PLAYER_FACTION }   from './constants/gameConfig';
 
@@ -35,6 +36,7 @@ import TitleScreen       from './screens/TitleScreen';
 import StrategyMapScreen from './screens/StrategyMapScreen';
 import BattleResultScreen from './screens/BattleResultScreen';
 import EndingScreen      from './screens/EndingScreen';
+import { ScenarioEditorScreen } from './screens/ScenarioEditorScreen';
 
 // 대화 시스템
 import DialogueOverlay     from './components/DialogueOverlay';
@@ -244,6 +246,9 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const provinces           = useAppStore(s => s.provinces);
   const { onTileClick }     = useInteractionManager();
 
+  // ─── 전투 대화 트리거 연결 (핵심 배선) ───────────────────────────────────
+  useBattleDialogueTrigger();
+
   const isReady   = mapData !== null;
   const isStarted = Object.keys(units).length > 0;
 
@@ -258,8 +263,7 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   // 전투 결과 감지 → appStore로 전달
   useEffect(() => {
     if (!battleResult) return;
-    const isWin = typeof battleResult === 'object' ? battleResult.isVictory : battleResult === 'player_win';
-    resolveBattle(isWin ? 'player_win' : 'player_lose');
+    resolveBattle(battleResult);
     clearBattleResult();
   }, [battleResult, resolveBattle, clearBattleResult]);
 
@@ -712,6 +716,7 @@ function App() {
   );
   if (screen === 'BATTLE_RESULT') return <BattleResultScreen />;
   if (screen === 'ENDING')        return <EndingScreen />;
+  if (screen === 'MAP_EDITOR')    return <ScenarioEditorScreen />;
 
   // fallback
   return <TitleScreen />;

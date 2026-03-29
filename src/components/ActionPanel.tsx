@@ -166,11 +166,11 @@ const ActionPanel: React.FC<ActionPanelProps> = ({ onOpenDomesticModal }) => {
 
   const tabItems = allItems.filter(i => i.tab === activeTab);
 
-  // 탭별 배지 수 (가용 행동 수)
+  // 탭별 배지 수 (가용 행동 수) - 탭 자체를 활성화/표시하기 위해 모든 아이템을 센다
   const tabCounts = useMemo(() => {
     const counts: Partial<Record<ActionTab, number>> = {};
     ACTION_TABS.forEach(t => {
-      counts[t.id] = allItems.filter(i => i.tab === t.id && i.isAvailable).length;
+      counts[t.id] = allItems.filter(i => i.tab === t.id).length;
     });
     return counts;
   }, [allItems]);
@@ -214,6 +214,9 @@ const ActionPanel: React.FC<ActionPanelProps> = ({ onOpenDomesticModal }) => {
       <div style={tabRowStyle}>
         {ACTION_TABS.map(tab => {
           const count = tabCounts[tab.id] ?? 0;
+          // 빈 탭은 숨김 처리 (추천 탭은 기본적으로 항상 노출)
+          if (count === 0 && tab.id !== 'recommend') return null;
+          
           const isActive = activeTab === tab.id;
           return (
             <button

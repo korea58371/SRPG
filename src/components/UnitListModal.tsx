@@ -19,6 +19,7 @@ export default function UnitListModal() {
   // 시야 또는 거리 기반 정렬 생략 (기본 스피드 혹은 ID 순, 여기선 편의상 ID 순)
   
   const getUnitName = (u: Unit) => {
+    if (u.name) return u.name;
     const names: Record<string, string> = { INFANTRY: '보병', SPEARMAN: '창병', CAVALRY: '기병', ARCHER: '궁병', GENERAL: '장군' };
     return (u.isHero ? '지휘관' : names[u.unitType] || '유닛') + `_${u.id.slice(-4)}`;
   };

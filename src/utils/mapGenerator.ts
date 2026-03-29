@@ -1,9 +1,15 @@
 import { createNoise2D } from 'simplex-noise';
 import { TerrainType } from '../types/gameTypes';
 import type { MapObjectData } from '../types/gameTypes';
-import { MAP_CONFIG, getTileDarkness } from '../constants/gameConfig';
+import { MAP_CONFIG, getTileDarkness, isPlayableTile } from '../constants/gameConfig';
 
 interface Point { x: number; y: number; }
+
+export interface SpawnZone {
+  team: 'attacker' | 'defender';
+  center: Point;
+  tiles: Point[];
+}
 
 // ─── 지형 프로필: 고도 기반 임계값 ────────────────────────────────────────────
 // fBm 노이즈값 = 해발 고도 (-1 ~ 1)
@@ -16,6 +22,17 @@ interface TerrainProfile {
   beachLevel:  number;
   grassLevel:  number;
   forestLevel: number;
+  baseTerrain?: TerrainType;
+  altTerrain?: TerrainType;
+}
+
+export interface GeographyConfig {
+  terrainProfile: 'plains' | 'highlands' | 'mixed' | 'desert' | 'snow';
+  waterLayout: 'none' | 'lake' | 'coastal_one' | 'coastal_all';
+  waterSides?: ('north' | 'south' | 'east' | 'west')[];
+  roadSides?: ('north' | 'south' | 'east' | 'west')[];
+  lakeRatio?: number;
+  shapeMask?: number[][];
 }
 
 const TERRAIN_PROFILES: TerrainProfile[] = [
@@ -36,6 +53,22 @@ const TERRAIN_PROFILES: TerrainProfile[] = [
     noiseScale: 34,
     seaLevel:   -0.70, beachLevel: -0.45,
     grassLevel:  0.25, forestLevel: 0.60,
+  },
+  {
+    name: 'desert', label: '사막',
+    noiseScale: 40,
+    seaLevel:   -0.80, beachLevel: -0.70,
+    grassLevel:  0.30, forestLevel: 0.70,
+    baseTerrain: TerrainType.DESERT, // 모래
+    altTerrain: TerrainType.CLIFF,   // 바위산
+  },
+  {
+    name: 'snow', label: '설원',
+    noiseScale: 35,
+    seaLevel:   -0.65, beachLevel: -0.55,
+    grassLevel:  0.35, forestLevel: 0.80,
+    baseTerrain: TerrainType.SNOW,     // 눈밭
+    altTerrain: TerrainType.FOREST,    // 침엽수림(설원)
   },
 ];
 
@@ -94,8 +127,8 @@ function makeFbm(scale: number) {
 function elevToTerrain(elev: number, p: TerrainProfile): TerrainType {
   if (elev <= p.seaLevel)    return TerrainType.SEA;
   if (elev <= p.beachLevel)  return TerrainType.BEACH;
-  if (elev <= p.grassLevel)  return TerrainType.GRASS;
-  if (elev <= p.forestLevel) return TerrainType.FOREST;
+  if (elev <= p.grassLevel)  return p.baseTerrain ?? TerrainType.GRASS;
+  if (elev <= p.forestLevel) return p.altTerrain ?? TerrainType.FOREST;
   return TerrainType.CLIFF;
 }
 
@@ -238,6 +271,8 @@ function placeEcologicalCities(
   for (let y = 2; y < height - 2; y++) {
     for (let x = 2; x < width - 2; x++) {
       if (map[y][x] !== TerrainType.GRASS) continue;
+      // 안개 밖에 놓인 타일은 제외 → 본사인 장소는 이동 가능 영역에만 배치
+      if (!isPlayableTile(x, y, width, height)) continue;
 
       // 평탄도: 주변 3×3 고도 분산
       let sumElev = 0, sumSq = 0, cnt = 0;
@@ -277,12 +312,12 @@ function placeEcologicalCities(
     if (!tooClose) chosen.push(c.pos);
   }
 
-  // 부족하면 랜덤 GRASS로 보충
+  // 부족하면 폈야블 영역 내의 랜덤 GRASS로 보충
   let fallbackAttempts = 0;
   while (chosen.length < count && fallbackAttempts++ < 3000) {
     const rx = Math.floor(Math.random() * width);
     const ry = Math.floor(Math.random() * height);
-    if (map[ry][rx] === TerrainType.GRASS) {
+    if (map[ry][rx] === TerrainType.GRASS && isPlayableTile(rx, ry, width, height)) {
       const tooClose = chosen.some(p => Math.abs(p.x - rx) + Math.abs(p.y - ry) < MIN_DIST * 0.5);
       if (!tooClose) chosen.push({ x: rx, y: ry });
     }
@@ -293,60 +328,98 @@ function placeEcologicalCities(
 
 // ─── 맵 생성 (생태 파이프라인) ───────────────────────────────────────────────
 // 파이프라인:
-//   1. fBm 고도맵 생성
-//   2. 물 레이아웃 (해안/호수) → 고도 조정
-//   3. 고도 → 지형 변환
-//   4. 생태 도시 배치 (평탄 + 수변 스코어링)
-//   5. 계곡/평야 우선 길 라우팅 (경사도 패널티 A*)
+//   1. fBm 고도맵 생성 / 2. 물 레이아웃 / 3. 고도→지형 / 4. 도시배치
+//   5. 도로 라우팅 / 6. 프롭 오브젝트 / 7. 스폰 존 (attacker/defender)
 export function generateMapData(
   width: number,
   height: number,
-): { map: TerrainType[][]; elevMap: number[][]; cities: Point[]; mapInfo: MapInfo; mapObjects: MapObjectData[] } {
-  const terrain = TERRAIN_PROFILES[Math.floor(Math.random() * TERRAIN_PROFILES.length)];
-  const water   = WATER_LAYOUTS[Math.floor(Math.random() * WATER_LAYOUTS.length)];
-  const waterSide: WaterSide | null =
-    water.type === 'coastal_one'
-      ? (['north', 'south', 'east', 'west'] as WaterSide[])[Math.floor(Math.random() * 4)]
-      : null;
+  config?: GeographyConfig
+): { map: TerrainType[][]; elevMap: number[][]; cities: Point[]; mapInfo: MapInfo; mapObjects: MapObjectData[]; spawnZones: SpawnZone[] } {
+  const terrain = config
+    ? TERRAIN_PROFILES.find(p => p.name === config.terrainProfile) || TERRAIN_PROFILES[0]
+    : TERRAIN_PROFILES[Math.floor(Math.random() * TERRAIN_PROFILES.length)];
+
+  const water = config
+    ? WATER_LAYOUTS.find(w => w.type === config.waterLayout) || WATER_LAYOUTS[0]
+    : WATER_LAYOUTS[Math.floor(Math.random() * WATER_LAYOUTS.length)];
+
+  const waterSides: WaterSide[] = config && config.waterSides
+    ? config.waterSides
+    : (water.type === 'coastal_one'
+        ? [(['north', 'south', 'east', 'west'] as WaterSide[])[Math.floor(Math.random() * 4)]]
+        : []);
 
   const label = water.label
-    ? `${terrain.label} ${water.label}${waterSide ? ` (${
-        waterSide === 'north' ? '북' : waterSide === 'south' ? '남' :
-        waterSide === 'east'  ? '동' : '서'})` : ''}`
+    ? `${terrain.label} ${water.label}${waterSides.length > 0 ? ` (${
+        waterSides.map(w => w === 'north' ? '북' : w === 'south' ? '남' : w === 'east' ? '동' : '서').join(',')
+      })` : ''}`
     : terrain.label;
 
-  const { edgeSeaBias, edgeRadius, lakeNoiseThreshold, lakeEdgeMargin } = water;
+  const roadSides    = config?.roadSides || [];
+  const edgeSeaBias  = water.edgeSeaBias ?? 0;
+  const edgeRadius   = water.edgeRadius  ?? 0;
+  const lakeRatio    = config?.lakeRatio ?? 0;
+  let lakeNoiseThreshold = water.lakeNoiseThreshold;
+  if (lakeRatio > 0.05) lakeNoiseThreshold = (lakeNoiseThreshold ?? -0.6) + lakeRatio * 0.8;
+  const lakeEdgeMargin = water.lakeEdgeMargin ?? 8;
 
   // STEP 1: 고도맵 생성 (fBm)
   const fbm = makeFbm(terrain.noiseScale);
   const elevMap: number[][] = Array.from({ length: height }, (_, y) =>
     Array.from({ length: width }, (_, x) => fbm(x, y)),
   );
-  
-  // 오브젝트 배치를 위한 팩터 (가변 그리드 동기화)
   const T = MAP_CONFIG.TILE_SIZE;
 
   // STEP 2: 물 레이아웃 → 고도 조정
-  // coastal: 가장자리 고도를 낮춰 해수면 아래로 → 바다
-  // lake: 보조 노이즈로 내륙 저지대에 호수
   const lakeNoise = lakeNoiseThreshold !== undefined ? (() => {
     const fn = createNoise2D();
     return (x: number, y: number) => fn(x / 30, y / 30);
   })() : null;
 
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (edgeSeaBias && edgeRadius) {
-        let dist: number;
-        if (water.type === 'coastal_all') {
-          dist = Math.min(x, width - 1 - x, y, height - 1 - y);
-        } else if (waterSide === 'north')  { dist = y; }
-        else if (waterSide === 'south')    { dist = height - 1 - y; }
-        else if (waterSide === 'east')     { dist = width - 1 - x; }
-        else                               { dist = x; }
-        if (dist < edgeRadius) {
-          const t = 1 - dist / edgeRadius;
-          elevMap[y][x] -= edgeSeaBias * t * t;
+  if (config?.shapeMask) {
+    const mask = config.shapeMask;
+    let blurredMask = mask.map(row => [...row]);
+    for (let iter = 0; iter < 3; iter++) {
+      const nextMask = blurredMask.map(row => [...row]);
+      for (let y = 1; y < height - 1; y++)
+        for (let x = 1; x < width - 1; x++) {
+          let sum = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += blurredMask[y+dy][x+dx];
+          nextMask[y][x] = sum / 9;
+        }
+      blurredMask = nextMask;
+    }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let mv = blurredMask[y][x];
+        if (mask[y][x] === 1 && mv < 0.25) mv = 0.25;
+        if (mask[y][x] === 0 && mv < 0.1)  mv = 0.1;
+        if (mv < -0.1)                elevMap[y][x] += mv * 2.5;
+        else if (mv >= -0.1 && mv < 0.2) elevMap[y][x] += (mv - 0.2);
+        else                          elevMap[y][x] += (mv * 0.3);
+        if ((mask[y][x] === 1 || mask[y][x] === 0) && elevMap[y][x] <= terrain.beachLevel)
+          elevMap[y][x] = terrain.beachLevel + 0.05 + Math.random() * 0.1;
+      }
+    }
+  } else {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (edgeSeaBias && edgeRadius) {
+          if (water.type === 'coastal_all') {
+            const dist = Math.min(x, width - 1 - x, y, height - 1 - y);
+            if (dist < edgeRadius) { const t = 1 - dist / edgeRadius; elevMap[y][x] -= edgeSeaBias * t * t; }
+          } else if (waterSides.length > 0) {
+            let biasApplied = 0;
+            for (const side of waterSides) {
+              let dist = Infinity;
+              if (side === 'north') dist = y;
+              else if (side === 'south') dist = height - 1 - y;
+              else if (side === 'east')  dist = width  - 1 - x;
+              else if (side === 'west')  dist = x;
+              if (dist < edgeRadius) { const t = 1 - dist / edgeRadius; biasApplied = Math.max(biasApplied, edgeSeaBias * t * t); }
+            }
+            if (biasApplied > 0) elevMap[y][x] -= biasApplied;
+          }
         }
       }
     }
@@ -356,90 +429,160 @@ export function generateMapData(
   const map: TerrainType[][] = elevMap.map((row, y) =>
     row.map((elev, x) => {
       let type = elevToTerrain(elev, terrain);
-
-      // 호수: 내륙 저지대 + 보조 노이즈
-      if (lakeNoise && lakeNoiseThreshold !== undefined) {
-        const margin = lakeEdgeMargin ?? 0;
+      if (!config?.shapeMask && lakeNoise && lakeNoiseThreshold !== undefined) {
         const distEdge = Math.min(x, width - 1 - x, y, height - 1 - y);
-        if (distEdge >= margin && type !== TerrainType.SEA && type !== TerrainType.CLIFF) {
+        if (distEdge >= lakeEdgeMargin && type !== TerrainType.SEA && type !== TerrainType.CLIFF)
           if (lakeNoise(x, y) < lakeNoiseThreshold) type = TerrainType.SEA;
-        }
       }
       return type;
     }),
   );
 
-  // STEP 4: 생태 도시 배치 (평탄도 + 수변 스코어)
+  // STEP 4: 생태 도시 배치
   const cities = placeEcologicalCities(map, elevMap, width, height, 3);
 
-  // STEP 5: 계곡/평야 우선 A* + 랜덤 경유지로 구불구불한 길 라우팅
-  for (let i = 0; i < cities.length; i++) {
-    const from  = cities[i];
-    const to    = cities[(i + 1) % cities.length];
-    const viaPoints = getWaypoints(from, to, map, width, height);
-    const stops = [from, ...viaPoints, to];
-
-    // 세그먼트별로 A* 라우팅, GRASS·BEACH에만 PATH 페인팅
-    for (let j = 0; j < stops.length - 1; j++) {
-      const seg = findPath(map, elevMap, stops[j], stops[j + 1]);
-      for (const p of seg) {
-        const t = map[p.y][p.x];
-        // SEA·CLIFF 위에는 길 불가, 나머지(GRASS·BEACH·FOREST)는 자연스러운 임도
-        if (t !== TerrainType.SEA && t !== TerrainType.CLIFF) {
-          map[p.y][p.x] = TerrainType.PATH;
+  // STEP 5: 도로 앵커 계산
+  const roadAnchors: Point[] = [];
+  if (config?.shapeMask) {
+    const candidates: Point[] = [];
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        if (config.shapeMask[y][x] === 0 &&
+           (config.shapeMask[y-1][x] === 1 || config.shapeMask[y+1][x] === 1 ||
+            config.shapeMask[y][x-1] === 1 || config.shapeMask[y][x+1] === 1))
+          candidates.push({ x, y });
+      }
+    }
+    candidates.sort(() => Math.random() - 0.5);
+    for (const cand of candidates) {
+      if (roadAnchors.length >= 4) break;
+      let anchor = cand;
+      if (!isPlayableTile(cand.x, cand.y, width, height)) {
+        const cx2 = Math.floor(width / 2), cy2 = Math.floor(height / 2);
+        for (let step = 1; step <= Math.max(width, height); step++) {
+          const tx = Math.round(cand.x + (cx2 - cand.x) * step / Math.max(width, height));
+          const ty = Math.round(cand.y + (cy2 - cand.y) * step / Math.max(width, height));
+          if (isPlayableTile(tx, ty, width, height) && map[ty]?.[tx] !== TerrainType.SEA) { anchor = { x: tx, y: ty }; break; }
         }
       }
+      if (map[anchor.y]?.[anchor.x] !== TerrainType.SEA && map[anchor.y]?.[anchor.x] !== TerrainType.CLIFF)
+        roadAnchors.push(anchor);
+    }
+  } else {
+    roadSides.forEach(side => {
+      let px = Math.floor(width / 2), py = Math.floor(height / 2);
+      if (side === 'north') { py = 1;          px = Math.floor(width  * (0.3 + Math.random() * 0.4)); }
+      if (side === 'south') { py = height - 2; px = Math.floor(width  * (0.3 + Math.random() * 0.4)); }
+      if (side === 'west')  { px = 1;          py = Math.floor(height * (0.3 + Math.random() * 0.4)); }
+      if (side === 'east')  { px = width - 2;  py = Math.floor(height * (0.3 + Math.random() * 0.4)); }
+      roadAnchors.push({ x: px, y: py });
+    });
+  }
+
+  // STEP 5b: A* 도로 라우팅
+  const allStops = [...roadAnchors, ...cities];
+  for (let i = 0; i < allStops.length; i++) {
+    const from = allStops[i];
+    const to   = allStops[(i + 1) % allStops.length];
+    const viaPoints = getWaypoints(from, to, map, width, height);
+    const stops = [from, ...viaPoints, to];
+    for (let j = 0; j < stops.length - 1; j++) {
+      const seg = findPath(map, elevMap, stops[j], stops[j + 1]);
+      for (const p of seg)
+        if (map[p.y][p.x] !== TerrainType.SEA && map[p.y][p.x] !== TerrainType.CLIFF)
+          map[p.y][p.x] = TerrainType.PATH;
     }
   }
 
-  // STEP 6: 프롭(나무, 산 등) 오브젝트 생성
+  // STEP 6: 프롭 오브젝트 생성
   const mapObjects: MapObjectData[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const type = map[y][x];
-      const cx = x * T + T / 2;
-      const cy = y * T + T / 2;
-      
+      const cx = x * T + T / 2, cy = y * T + T / 2;
       if (type === TerrainType.FOREST) {
-        // 숲 타일 당 1~3개의 나무 생성
         const count = 1 + Math.floor(Math.random() * 2);
-        for (let i = 0; i < count; i++) {
-          const offsetX = (Math.random() - 0.5) * (T * 0.6);
-          const offsetY = (Math.random() - 0.5) * (T * 0.6);
-          mapObjects.push({
-            id: `tree_${x}_${y}_${i}`,
-            type: 'TREE',
-            lx: x, ly: y,
-            px: cx + offsetX,
-            py: cy + offsetY,
-          });
-        }
+        for (let i = 0; i < count; i++)
+          mapObjects.push({ id: `tree_${x}_${y}_${i}`, type: 'TREE', lx: x, ly: y,
+            px: cx + (Math.random() - 0.5) * T * 0.6, py: cy + (Math.random() - 0.5) * T * 0.6 });
       } else if (type === TerrainType.CLIFF) {
-        // 절벽 타일 당 높은 산(돌) 하나 생성
-        mapObjects.push({
-          id: `mountain_${x}_${y}`,
-          type: 'MOUNTAIN',
-          lx: x, ly: y,
-          px: cx, py: cy,
-        });
+        mapObjects.push({ id: `mountain_${x}_${y}`, type: 'MOUNTAIN', lx: x, ly: y, px: cx, py: cy });
       }
     }
   }
+  for (const c of cities)
+    mapObjects.push({ id: `house_${c.x}_${c.y}`, type: 'HOUSE', lx: c.x, ly: c.y, px: c.x * T + T / 2, py: c.y * T + T / 2 });
 
-  // 도시 타일 위에 집 오브젝트 생성 (STEP 4에서 만들어진 cities 배열 기반)
-  for (let i = 0; i < cities.length; i++) {
-    const c = cities[i];
-    mapObjects.push({
-      id: `house_${c.x}_${c.y}`,
-      type: 'HOUSE',
-      lx: c.x, ly: c.y,
-      px: c.x * T + T / 2,
-      py: c.y * T + T / 2,
-    });
+  // STEP 7: 스폰 존 계산 (attacker / defender)
+  // 안개 경계(0.65)보다 훨씬 안쪽(0.55)에만 배치하여 안전 마진 확보
+  const SAFE_MARGIN = 0.55;
+  const ZONE_RADIUS = 3;
+  const MIN_SEPARATION = 18; // 공격/수비 스폰 간 최소 맨해튼 거리
+
+  const isSafeSpawn = (sx: number, sy: number): boolean => {
+    const mcx = width / 2, mcy = height / 2;
+    return Math.max(Math.abs(sx - mcx + 0.5) / mcx, Math.abs(sy - mcy + 0.5) / mcy) <= SAFE_MARGIN;
+  };
+
+  const snapToSafe = (pt: Point): Point => {
+    if (isSafeSpawn(pt.x, pt.y)) return pt;
+    const mcx = Math.floor(width / 2), mcy = Math.floor(height / 2);
+    for (let step = 1; step <= Math.max(width, height); step++) {
+      const tx = Math.round(pt.x + (mcx - pt.x) * step / Math.max(width, height));
+      const ty = Math.round(pt.y + (mcy - pt.y) * step / Math.max(width, height));
+      if (isSafeSpawn(tx, ty) && map[ty]?.[tx] !== TerrainType.SEA && map[ty]?.[tx] !== TerrainType.CLIFF)
+        return { x: tx, y: ty };
+    }
+    return { x: mcx, y: mcy };
+  };
+
+  // 공격 앵커를 안전 영역으로 스냅
+  const safeAnchors = roadAnchors.slice(0, 4).map(snapToSafe)
+    .filter(a => map[a.y]?.[a.x] !== TerrainType.SEA && map[a.y]?.[a.x] !== TerrainType.CLIFF);
+
+  // 수비 스폰: 도시 중 공격 앵커에서 가장 먼 위치 선택
+  let defCenter: Point = cities.length > 0 ? snapToSafe(cities[0]) : { x: Math.floor(width / 2), y: Math.floor(height / 2) };
+  if (cities.length > 1 && safeAnchors.length > 0) {
+    const sorted = [...cities]
+      .map(c => ({ pt: snapToSafe(c), minDist: Math.min(...safeAnchors.map(a => Math.abs(c.x - a.x) + Math.abs(c.y - a.y))) }))
+      .sort((a, b) => b.minDist - a.minDist);
+    defCenter = sorted[0].pt;
   }
 
-  return { map, elevMap, cities, mapInfo: { label, terrainName: terrain.name, waterType: water.type, terrainProfile: terrain }, mapObjects };
+  const spawnZones: SpawnZone[] = [];
+
+  // 수비측 존
+  const defTiles: Point[] = [];
+  for (let dy = -ZONE_RADIUS; dy <= ZONE_RADIUS; dy++) {
+    for (let dx = -ZONE_RADIUS; dx <= ZONE_RADIUS; dx++) {
+      const nx = defCenter.x + dx, ny = defCenter.y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      if (dx * dx + dy * dy > ZONE_RADIUS * ZONE_RADIUS) continue;
+      const t = map[ny][nx];
+      if (t !== TerrainType.SEA && t !== TerrainType.CLIFF && isSafeSpawn(nx, ny)) defTiles.push({ x: nx, y: ny });
+    }
+  }
+  if (defTiles.length > 0) spawnZones.push({ team: 'defender', center: defCenter, tiles: defTiles });
+
+  // 공격측 존 (수비와 MIN_SEPARATION 이상 거리가 떨어진 경우만)
+  for (const anchor of safeAnchors) {
+    if (Math.abs(anchor.x - defCenter.x) + Math.abs(anchor.y - defCenter.y) < MIN_SEPARATION) continue;
+    const atkTiles: Point[] = [];
+    for (let dy = -ZONE_RADIUS; dy <= ZONE_RADIUS; dy++) {
+      for (let dx = -ZONE_RADIUS; dx <= ZONE_RADIUS; dx++) {
+        const nx = anchor.x + dx, ny = anchor.y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        if (dx * dx + dy * dy > ZONE_RADIUS * ZONE_RADIUS) continue;
+        const t = map[ny][nx];
+        if (t !== TerrainType.SEA && t !== TerrainType.CLIFF && isSafeSpawn(nx, ny)) atkTiles.push({ x: nx, y: ny });
+      }
+    }
+    if (atkTiles.length > 0) spawnZones.push({ team: 'attacker', center: anchor, tiles: atkTiles });
+  }
+
+  return { map, elevMap, cities, mapInfo: { label, terrainName: terrain.name, waterType: water.type, terrainProfile: terrain }, mapObjects, spawnZones };
 }
+
 
 // ─── 부드러운 통짜 맵 텍스처 렌더링기 (단색 타일 버전) ──────────────────────
 // 사용자가 지정한 안개/외곽 장식을 생성하기 위한 함수
@@ -481,21 +624,25 @@ export function generateMapTexture(
   height: number,
   tileSize: number,
   mapData: TerrainType[][],     // 로지컬 맵 (타일 색칠용)
+  spawnZones?: SpawnZone[],     // 스폰 존 오버레이 (선택)
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width * tileSize;
   canvas.height = height * tileSize;
-  const ctx = canvas.getContext('2d', { alpha: false });
+  // alpha:true 으로 반투명 오버레이(rgba) 합성을 사용함
+  const ctx = canvas.getContext('2d', { alpha: true });
   if (!ctx) return canvas;
 
   // 플랫/파스텔톤 팔레트
   const PALETTE: Record<number, number[]> = {
     [TerrainType.SEA]:    [107, 140, 206],
     [TerrainType.BEACH]:  [211, 196, 163],
-    [TerrainType.GRASS]:  [172, 177, 123], // #acb17b
-    [TerrainType.FOREST]: [141, 151,  97], // #8d9761
+    [TerrainType.GRASS]:  [172, 177, 123],
+    [TerrainType.FOREST]: [141, 151,  97],
     [TerrainType.CLIFF]:  [136, 139, 119],
-    [TerrainType.PATH]:   [210, 208, 196], // #d2d0c4
+    [TerrainType.PATH]:   [210, 208, 196],
+    [TerrainType.DESERT]: [224, 206, 153], // #e0ce99 Sand color
+    [TerrainType.SNOW]:   [235, 240, 245], // #ebf0f5 Snow color
   };
 
   // Base Pass: 각 타일을 단색 사각형으로 렌더링
@@ -522,6 +669,67 @@ export function generateMapTexture(
   }
 
   // 그리드 라인 오버레이 생략 (동적 로컬 그리드로 대체됨)
+
+  // 스폰 존 오버레이 렌더링 (지형 및 PATH 렌더 후에 그려 아이콘이 덮어사운)
+  if (spawnZones && spawnZones.length > 0) {
+    for (const zone of spawnZones) {
+      // 수비측: 파랑, 공격측: 빨강
+      const isDefender = zone.team === 'defender';
+      const fillColor  = isDefender ? 'rgba(60,120,255,0.45)' : 'rgba(255,60,60,0.45)';
+      const borderColor = isDefender ? 'rgba(140,200,255,1.0)' : 'rgba(255,140,140,1.0)';
+      const glowColor   = isDefender ? 'rgba(40,100,220,0.25)' : 'rgba(220,40,40,0.25)';
+
+      ctx.save();
+      for (const tile of zone.tiles) {
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
+      }
+
+      const tileSet = new Set(zone.tiles.map(t => `${t.x},${t.y}`));
+      for (const tile of zone.tiles) {
+        const sides: [number, number, boolean][] = [
+          [tile.x * tileSize,         tile.y * tileSize,         true  ],  // top
+          [tile.x * tileSize,         (tile.y+1) * tileSize,     true  ],  // bottom
+          [tile.x * tileSize,         tile.y * tileSize,         false ],  // left
+          [(tile.x+1) * tileSize,     tile.y * tileSize,         false ],  // right
+        ];
+        const neighbors = [
+          [tile.x, tile.y-1], [tile.x, tile.y+1], [tile.x-1, tile.y], [tile.x+1, tile.y]
+        ];
+        sides.forEach(([bx, by, isHoriz], si) => {
+          const [nx, ny] = neighbors[si];
+          if (!tileSet.has(`${nx},${ny}`)) {
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            if (isHoriz) { ctx.moveTo(bx, by); ctx.lineTo(bx + tileSize, by); }
+            else         { ctx.moveTo(bx, by); ctx.lineTo(bx, by + tileSize); }
+            ctx.stroke();
+          }
+        });
+      }
+
+      const icx = zone.center.x * tileSize + tileSize / 2;
+      const icy = zone.center.y * tileSize + tileSize / 2;
+      const iconR = tileSize * 1.2;
+
+      ctx.fillStyle = glowColor;
+      ctx.beginPath(); ctx.arc(icx, icy, iconR * 1.6, 0, Math.PI * 2); ctx.fill();
+
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(icx, icy, iconR, 0, Math.PI * 2); ctx.stroke();
+
+      // 수비=방패 컡펜, 공격=✕
+      ctx.fillStyle = borderColor;
+      ctx.font = `bold ${Math.round(tileSize * 1.2)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isDefender ? '★' : '✕', icx, icy);
+
+      ctx.restore();
+    }
+  }
 
   return canvas;
 }

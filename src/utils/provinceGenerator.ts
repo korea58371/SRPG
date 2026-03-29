@@ -187,7 +187,9 @@ function fractalizeEdge(
   const length = Math.sqrt(dx * dx + dy * dy);
 
   // 무조건 3개 이상의 세그먼트로 분할하여 짧은 엣지에서도 왜곡이 발생하도록 함 (1.5픽셀 단위)
-  const segments = Math.max(3, Math.floor(length / 1.5));
+  // 단, Delaunay circumcenter가 무한대 근처로 튀는 경우에 대비해 최대 분할 수를 200으로 제한합니다.
+  const rawSegments = Math.floor(length / 1.5);
+  const segments = Math.min(Math.max(3, rawSegments), 200);
   const pts: number[] = [px1, py1];
 
   if (segments > 1) {
@@ -619,9 +621,7 @@ export function generateProvinces(
 
 
   // ── 6-e. 각 세력 유역 내에서 Province 씨드 선택 ──────────────────────────
-  // 씨드 선택 기준: ① 평야/고원 지형 우선 ② 최소 이격 거리 (씨드 개수 증가 반영)
-  const MIN_SEED_DIST2 = (svgW / 25) * (svgW / 25);
-
+  // 씨드 선택 기준: Farthest Point Sampling(지형 가중치 포함)으로 최대한 고르게 흩뿌림
   type SeedInfo = { mi: number; px: number; py: number; faction: FactionId; order: number };
 
   function pickSeedsFromCells(
@@ -629,30 +629,78 @@ export function generateProvinces(
     count: number,
     faction: FactionId,
   ): SeedInfo[] {
-    // 평야/구릉 지형 최우선, 이어서 해안/산악 및 고도순 정렬
-    const sorted = [...cells].sort((a, b) => {
-      const pa = cellTerrains[a] === 'plains' || cellTerrains[a] === 'hill' ? 0 : 1;
-      const pb = cellTerrains[b] === 'plains' || cellTerrains[b] === 'hill' ? 0 : 1;
-      return pa - pb || cellHeights[a] - cellHeights[b];
-    });
-
     const result: SeedInfo[] = [];
-    for (const mi of sorted) {
-      if (result.length >= count) break;
-      const tooClose = result.some(s =>
-        dist2(s.px, s.py, microPts[mi][0], microPts[mi][1]) < MIN_SEED_DIST2
-      );
-      if (!tooClose) result.push({ mi, px: microPts[mi][0], py: microPts[mi][1], faction, order: result.length });
+    if (cells.length === 0) return result;
+    
+    // 지형 우선도에 따른 기본 가중치 상수 (낮을수록 선호됨 - 거리 계산 시 페널티로 작용)
+    const getTerrainCost = (mi: number): number => {
+      const t = cellTerrains[mi];
+      if (t === 'plains' || t === 'hill') return 1.0;
+      if (t === 'forest' || t === 'savanna' || t === 'coastal') return 1.5;
+      return 3.0; // 산악, 빙하, 사막 등 험지
+    };
+
+    // 첫 번째 씨드: 세력 영역의 무게 중심에 가장 가까우면서 지형 조건이 좋은 곳 선택
+    let bestFirst = cells[0];
+    let bestFirstScore = Infinity;
+    
+    let cx = 0, cy = 0;
+    for (const mi of cells) {
+      cx += microPts[mi][0];
+      cy += microPts[mi][1];
     }
-    // 이격 거리 제약을 채우지 못한 경우 무시하고 남은 갯수 채움
-    if (result.length < count) {
-      for (const mi of sorted) {
-        if (result.length >= count) break;
-        if (!result.some(s => s.mi === mi)) {
-          result.push({ mi, px: microPts[mi][0], py: microPts[mi][1], faction, order: result.length });
-        }
+    cx /= cells.length;
+    cy /= cells.length;
+
+    for (const mi of cells) {
+      const dCenter = Math.sqrt(dist2(microPts[mi][0], microPts[mi][1], cx, cy));
+      // 무게 중심에서의 거리 + 지형 페널티 + 고도 페널티
+      const score = (getTerrainCost(mi) * 500) + (cellHeights[mi] * 200) + dCenter;
+      if (score < bestFirstScore) {
+        bestFirstScore = score;
+        bestFirst = mi;
       }
     }
+    
+    result.push({ mi: bestFirst, px: microPts[bestFirst][0], py: microPts[bestFirst][1], faction, order: 0 });
+
+    // 나머지 count - 1 개 씨드를 FPS 기반으로 가장 멀리 떨어진 위치에 다단계 배치
+    for (let i = 1; i < count; i++) {
+      let bestMi = -1;
+      let maxScore = -Infinity;
+      
+      for (const mi of cells) {
+        // 이미 선택된 셀 제외
+        let isAlreadyPicked = false;
+        let minDist2 = Infinity;
+        const px = microPts[mi][0];
+        const py = microPts[mi][1];
+        
+        for (const r of result) {
+          if (r.mi === mi) {
+            isAlreadyPicked = true;
+            break;
+          }
+          const d2 = dist2(px, py, r.px, r.py);
+          if (d2 < minDist2) minDist2 = d2;
+        }
+        if (isAlreadyPicked) continue;
+        
+        // 거리 점수 (멀수록 높음)를 지형 코스트로 나눔 => 평야에 이점이 주어지되, 거리가 가장 중요함
+        const score = Math.sqrt(minDist2) / getTerrainCost(mi);
+        if (score > maxScore) {
+          maxScore = score;
+          bestMi = mi;
+        }
+      }
+      
+      if (bestMi !== -1) {
+        result.push({ mi: bestMi, px: microPts[bestMi][0], py: microPts[bestMi][1], faction, order: result.length });
+      } else {
+        break;
+      }
+    }
+    
     return result;
   }
 
@@ -724,9 +772,69 @@ export function generateProvinces(
     }
   }
 
+  // ── 7-c. 소규모 섬(연결 컴포넌트) Province 단일 병합 ─────────────────────
+  // 문제: 작은 섬 하나에 복수의 Province 씨드가 배정되어 마이크로셀 1~2개짜리
+  //       극소 영지가 발생함. 섬의 셀 수가 임계치 미만이면 무조건 1개 Province로 합침.
+  const SMALL_ISLAND_THRESHOLD = 80; // 이 셀 수 미만의 섬은 단일 Province로 병합
+
+  // BFS로 육지 연결 컴포넌트(섬/대륙) 탐색
+  const landCompId = new Int32Array(MICRO_CELLS).fill(-1);
+  const landCompCells: number[][] = [];
+  for (let i = 0; i < MICRO_CELLS; i++) {
+    if (!isLand[i] || landCompId[i] !== -1) continue;
+    const comp: number[] = [];
+    const bfsQ: number[] = [i];
+    landCompId[i] = landCompCells.length;
+    let bfsHead = 0;
+    while (bfsHead < bfsQ.length) {
+      const ci = bfsQ[bfsHead++];
+      comp.push(ci);
+      for (const nb of cellNeighbors[ci]) {
+        if (isLand[nb] && landCompId[nb] === -1) {
+          landCompId[nb] = landCompCells.length;
+          bfsQ.push(nb);
+        }
+      }
+    }
+    landCompCells.push(comp);
+  }
+
+  // 소규모 섬의 Province를 단일 Province로 강제 병합
+  const mergedSeeds = new Set<number>(); // 흡수되어 사라질 seed 인덱스 집합
+  for (const comp of landCompCells) {
+    if (comp.length >= SMALL_ISLAND_THRESHOLD) continue; // 충분히 큰 섬/대륙 → 스킵
+
+    // 이 섬에 속한 Province seed별 보유 셀 수 집계
+    const seedCellCnt = new Map<number, number>();
+    for (const ci of comp) {
+      const si = microToProv[ci];
+      if (si !== null) seedCellCnt.set(si, (seedCellCnt.get(si) ?? 0) + 1);
+    }
+    if (seedCellCnt.size <= 1) continue; // 이미 단일 Province → 스킵
+
+    // 가장 많은 셀을 가진 seed를 survivor(대표)로 선택 (수도 씨드가 있으면 우선)
+    let survivorSI = -1;
+    let maxCnt = -1;
+    for (const [si, cnt] of seedCellCnt) {
+      // 첫 번째 씨드(수도 후보)를 우선 선택하되, 더 큰 쪽이 있으면 교체
+      if (cnt > maxCnt) { maxCnt = cnt; survivorSI = si; }
+    }
+    if (survivorSI === -1) continue;
+
+    // 섬 내 모든 셀을 survivor Province로 재할당
+    for (const ci of comp) {
+      microToProv[ci] = survivorSI;
+    }
+    // 흡수된 나머지 seed들을 병합 목록에 추가
+    for (const [si] of seedCellCnt) {
+      if (si !== survivorSI) mergedSeeds.add(si);
+    }
+  }
+
   // ── 8. Province 인접성 계산 ──────────────────────────────────────────────
+  // mergedSeeds에 포함된 Province는 더 이상 존재하지 않으므로 provinceIds 조회 시 안전하게 처리
   const provAdjacency = new Map<string, Set<string>>();
-  provinceIds.forEach(id => provAdjacency.set(id, new Set()));
+  provinceIds.forEach((id, si) => { if (!mergedSeeds.has(si)) provAdjacency.set(id, new Set()); });
 
   // Province가 바다에 접해 있는지 (인접 마이크로셀 중 바다가 있으면)
   const provIsCoastal = new Set<string>();
@@ -737,14 +845,16 @@ export function generateProvinces(
     if (opp < e) continue;
     const a = triangles[e], b = triangles[opp];
     const pa = microToProv[a], pb = microToProv[b];
-    // 육지-바다 접촉 → 해안 Province 마킹
-    if (pa !== null && !isLand[b]) provIsCoastal.add(provinceIds[pa]);
-    if (pb !== null && !isLand[a]) provIsCoastal.add(provinceIds[pb]);
-    // Province-Province 인접
+    // 육지-바다 접촉 → 해안 Province 마킹 (병합된 Province는 스킵)
+    if (pa !== null && !mergedSeeds.has(pa) && !isLand[b]) provIsCoastal.add(provinceIds[pa]);
+    if (pb !== null && !mergedSeeds.has(pb) && !isLand[a]) provIsCoastal.add(provinceIds[pb]);
+    // Province-Province 인접 (병합된 Province는 존재하지 않으므로 스킵)
     if (pa === null || pb === null || pa === pb) continue;
+    if (mergedSeeds.has(pa) || mergedSeeds.has(pb)) continue;
     const idA = provinceIds[pa], idB = provinceIds[pb];
-    provAdjacency.get(idA)!.add(idB);
-    provAdjacency.get(idB)!.add(idA);
+    // provAdjacency에 등록된 경우에만 안전하게 추가
+    provAdjacency.get(idA)?.add(idB);
+    provAdjacency.get(idB)?.add(idA);
   }
 
   // ── 9. Province 지형 타입 (씨드 셀 기준) ─────────────────────────────────
@@ -758,6 +868,7 @@ export function generateProvinces(
   const factionCapSet = new Set<string>();
 
   seeds.forEach((s, si) => {
+    if (mergedSeeds.has(si)) return; // 병합(흡수)된 Province는 객체 생성 스킵
     const id      = provinceIds[si];
     const faction = s.faction;
     const terrain = seedTerrainOf[si];
@@ -874,7 +985,6 @@ export function generateProvinces(
   const boundaryEdges: BoundaryEdge[] = [];
   const coastlineEdges: { pts: number[] }[] = [];
   const cc = voronoi.circumcenters;
-
   // 방향성 해안선 엣지. 육지를 항상 진행 방향의 왼쪽에 위치시키기 위함.
   interface DirectedEdge {
     t1: number;

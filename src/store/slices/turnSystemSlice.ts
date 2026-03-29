@@ -179,9 +179,23 @@ function checkMatchRules(get: any, set: any): boolean {
 
   if (isWin || isLoss) {
     const playerWon = isWin;
-    const survivorCount = Object.values(s.units).filter((u: any) => u.factionId === PLAYER_FACTION && u.state !== 'DEAD').length;
+    const playerUnits = Object.values(s.units).filter((u: any) => u.factionId === PLAYER_FACTION);
+    const survivorCount = playerUnits.filter((u: any) => u.state !== 'DEAD').length;
+    
+    // 전투 종료 후 소모된 병사 수 환산 (HP 역산)
+    const survivingTroops: Record<string, number> = {};
+    for (const u of playerUnits as any[]) {
+      if (u.characterId) {
+        if (u.state === 'DEAD' || u.hp <= 0) {
+          survivingTroops[u.characterId] = 0;
+        } else {
+          survivingTroops[u.characterId] = Math.floor(u.hp / 1.5);
+        }
+      }
+    }
+
     setTimeout(() => {
-      set({ battleResult: { isVictory: playerWon, turn: get().turnNumber, survivorCount } });
+      set({ battleResult: { isVictory: playerWon, turn: get().turnNumber, survivorCount, survivingTroops } });
     }, 1000);
     return true;
   }

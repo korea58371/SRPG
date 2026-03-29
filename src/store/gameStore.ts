@@ -32,13 +32,13 @@ export function getGeneralBuff(
   let best: Unit | null = null;
   let bestDist = Infinity;
   for (const u of Object.values(allUnits)) {
-    if (u.unitType !== 'GENERAL' || u.factionId !== unit.factionId || u.state === 'DEAD') continue;
-    const radius = u.generalCharisma ?? 3;
+    if (!u.isHero || u.factionId !== unit.factionId || u.state === 'DEAD') continue;
+    const radius = u.generalLeadership ?? 3;
     const dist = manhattan(unit.logicalX, unit.logicalY, u.logicalX, u.logicalY);
     if (dist <= radius && dist < bestDist) { best = u; bestDist = dist; }
   }
   return {
-    attackBonus:  best ? (best.generalStrength ?? 0) * 0.5 : 0,
+    attackBonus:  best ? (best.generalCommand ?? 0) * 0.5 : 0,
     defenseBonus: best ? (best.generalIntelligence ?? 0) * 0.3 : 0,
   };
 }

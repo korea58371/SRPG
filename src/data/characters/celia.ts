@@ -15,16 +15,19 @@ export const CELIA: Character = {
   loyalty: 0,
   relationships: {},
   baseStats: {
-    hp: 45,
-    strength: 15,
+    power: 15,
+    toughness: 18,
+    constitution: 45,
+    agility: 10,
+    command: 62,
+    leadership: 85,
     intelligence: 110,
     politics: 60,
-    charisma: 85,
-    speed: 10,
+    charm: 80, dexterity: 50, magic: 50,
   },
   traits: [],
   equipment: [],
-  skills: ['fireball', 'heal'], // 기존 존재하는 스킬 중 마법 계열 부여
+  skills: ['mock-cone', 'mock-debuff-def'], // 마법 계열 스킬 부여
   troopType: 'ARCHER', // 현재 UnitType에 MAGE가 없으므로 ARCHER(원거리)로 임시 대체
   troopCount: 0,
 };
