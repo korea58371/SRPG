@@ -2,6 +2,7 @@ import type { StoreSlice, GameStateSlice } from './storeTypes';
 import { TerrainType } from '../../types/gameTypes';
 import type { Unit, UnitType, LevelObjective } from '../../types/gameTypes';
 import { MAP_CONFIG, UNIT_CONFIG, PLAYER_FACTION, isPlayableTile, BASE_STATS, TROOP_SKILLS } from '../../constants/gameConfig';
+import type { SpawnZone } from '../../utils/mapGenerator';
 import { tileToPixel } from '../gameStore'; // Helper functions from Root store wrapper
 import { useAppStore } from '../appStore';
 
@@ -11,6 +12,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
   elevMap: null,
   mapObjects: [],
   cities: [],
+  spawnZones: [],
   battleType: 'defensive',
   biome: null,
   victoryCondition: null,
@@ -18,6 +20,7 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
 
   setMapData: (mapData, elevMap, mapObjects) => set({ mapData, elevMap, mapObjects }),
   setCities: (cities) => set({ cities }),
+  setSpawnZones: (zones: SpawnZone[]) => set({ spawnZones: zones }),
   setBattleType: (type) => set({ battleType: type }),
   setBiome: (biome) => set({ biome }),
 
@@ -120,30 +123,48 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
       return;
     }
 
-    // isPlayableTile이 허용하는 중앙 60% 구역의 실제 픽셀 경계 계산
-    // getTileDarkness 기준: dist(= Math.max(|nx-0.5|/cx, |ny-0.5|/cy)) <= 0.6 이면 이동 가능
-    // → 이동 가능 구역: cx * 0.6 기준으로 중앙에서 ±(mapWidth*0.6/2) 범위
-    const playableMargin = Math.floor(mapWidth * 0.2); // 외곽 20% 마진 (각 변에서)
-    const pMinX = playableMargin;
-    const pMaxX = mapWidth - 1 - playableMargin;
-    const pMinY = Math.floor(mapHeight * 0.2);
-    const pMaxY = mapHeight - 1 - Math.floor(mapHeight * 0.2);
-
-    // 적군 defensive 배치: isPlayableTile 구역의 좌/우 경계 부근
-    const enemyMargin = 2; // 이동 가능 구역 경계에서 여분 2칸 안쪽
-    const enemyLeft  = { minX: pMinX + enemyMargin, maxX: pMinX + enemyMargin + 5 };
-    const enemyRight = { minX: pMaxX - enemyMargin - 5, maxX: pMaxX - enemyMargin };
-    const enemyTop   = { minY: pMinY + enemyMargin, maxY: pMinY + enemyMargin + 5 };
-    const enemyBot   = { minY: pMaxY - enemyMargin - 5, maxY: pMaxY - enemyMargin };
-
     const appStoreState = useAppStore.getState();
     const characters = appStoreState.characters;
     const deployingHeroIds = appStoreState.pendingBattle?.deployingHeroIds || [];
 
-    // 출격 시 세팅된 영웅 숫자로만 구성 (미세팅 시 0명이 되어 패배 처리되도록 엄격화)
+    // 출격 시 세팅된 영웅 숫자로만 구성
     const playerUnitCount = deployingHeroIds.length;
     const enemyUnitCount = UNIT_CONFIG.ENEMY_UNIT_COUNT;
     const totalUnits = playerUnitCount + enemyUnitCount;
+
+    // ─── 스폰 존 기반 배치 준비 ──────────────────────────────────────────────
+    // spawnZones: 'defender'(수비측 = 플레이어 수비 or 적 수비), 'attacker'(공격측)
+    // battleType === 'defensive': 플레이어=defender, 적=attacker
+    // battleType === 'offensive': 플레이어=attacker, 적=defender
+    const currentSpawnZones = get().spawnZones;
+    const defenderZone = currentSpawnZones.find(z => z.team === 'defender');
+    const attackerZone = currentSpawnZones.find(z => z.team === 'attacker');
+
+    // battleType에 따라 player/enemy가 어떤 존을 쓸지 결정
+    const isOffensive = battleType === 'offensive';
+    const playerZone  = isOffensive ? attackerZone  : defenderZone;
+    const enemyZone   = isOffensive ? defenderZone  : attackerZone;
+
+    // 존 타일 중 유효한(미점령, 육지) 타일 pool 구성
+    const buildTilePool = (zone: typeof defenderZone): {lx:number, ly:number}[] => {
+      if (!zone) return [];
+      const mapData = get().mapData;
+      return zone.tiles.filter(t => {
+        const terrain = mapData?.[t.y]?.[t.x] ?? TerrainType.SEA;
+        const valid = terrain === TerrainType.GRASS || terrain === TerrainType.PATH ||
+                      terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
+        return valid && isPlayableTile(t.x, t.y, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT) && !usedTiles.has(`${t.x},${t.y}`);
+      }).map(t => ({ lx: t.x, ly: t.y }));
+    };
+
+    const getFromPool = (pool: {lx:number, ly:number}[]): {lx:number, ly:number} | null => {
+      if (pool.length === 0) return null;
+      const idx = Math.floor(Math.random() * pool.length);
+      const tile = pool[idx];
+      pool.splice(idx, 1); // 사용한 타일 제거
+      usedTiles.add(`${tile.lx},${tile.ly}`);
+      return tile;
+    };
 
     for (let i = 0; i < totalUnits; i++) {
       let lx = 0, ly = 0;
@@ -159,51 +180,46 @@ export const createGameStateSlice: StoreSlice<GameStateSlice> = (set, get) => ({
         isHero = (fId === PLAYER_FACTION && i < 3) || (fId !== PLAYER_FACTION && (i - playerUnitCount) < 2);
       }
 
-      let tries = 0;
-      let found = false;
-      while (tries < 200) {
-        const isCenterSpawn = (battleType === 'defensive' && fId === PLAYER_FACTION) || (battleType === 'offensive' && fId !== PLAYER_FACTION);
+      // 스폰 존 타일풀에서 배치 위치 결정
+      const pool = buildTilePool(isPlayer ? playerZone : enemyZone);
+      const fromPool = getFromPool(pool);
 
-        if (isCenterSpawn) {
-          lx = Math.floor(mapWidth / 2) + Math.floor(Math.random() * 6) - 3;
-          ly = Math.floor(mapHeight / 2) + Math.floor(Math.random() * 6) - 3;
-        } else {
-          const side = Math.floor(Math.random() * 4);
-          if (side === 0) {
-            lx = enemyLeft.minX  + Math.floor(Math.random() * (enemyLeft.maxX  - enemyLeft.minX  + 1));
-            ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-          } else if (side === 1) {
-            lx = enemyRight.minX + Math.floor(Math.random() * (enemyRight.maxX - enemyRight.minX + 1));
-            ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY + 1));
-          } else if (side === 2) {
-            lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
-            ly = enemyTop.minY   + Math.floor(Math.random() * (enemyTop.maxY   - enemyTop.minY   + 1));
+      if (fromPool) {
+        lx = fromPool.lx;
+        ly = fromPool.ly;
+      } else {
+        // 폴백: 스폰 존 없거나 풀 부족 → 기존 랜덤 배치
+        const playableMargin = Math.floor(mapWidth * 0.2);
+        const pMinX = playableMargin, pMaxX = mapWidth - 1 - playableMargin;
+        const pMinY = Math.floor(mapHeight * 0.2), pMaxY = mapHeight - 1 - Math.floor(mapHeight * 0.2);
+        const centerX = Math.floor(mapWidth / 2);
+        const centerY = Math.floor(mapHeight / 2);
+        let tries = 0;
+        while (tries < 200) {
+          if (isPlayer) {
+            lx = centerX + Math.floor(Math.random() * 6) - 3;
+            ly = centerY + Math.floor(Math.random() * 6) - 3;
           } else {
-            lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX + 1));
-            ly = enemyBot.minY   + Math.floor(Math.random() * (enemyBot.maxY   - enemyBot.minY   + 1));
+            const side = Math.floor(Math.random() * 4);
+            const em = 2;
+            if (side === 0)      { lx = pMinX + em + Math.floor(Math.random() * 5); ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY)); }
+            else if (side === 1) { lx = pMaxX - em - Math.floor(Math.random() * 5); ly = pMinY + Math.floor(Math.random() * (pMaxY - pMinY)); }
+            else if (side === 2) { lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX)); ly = pMinY + em + Math.floor(Math.random() * 5); }
+            else                 { lx = pMinX + Math.floor(Math.random() * (pMaxX - pMinX)); ly = pMaxY - em - Math.floor(Math.random() * 5); }
           }
+          const mapData = get().mapData;
+          const terrain = mapData?.[ly]?.[lx] ?? TerrainType.SEA;
+          const validTerrain = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
+          if (validTerrain && isPlayableTile(lx, ly, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT) && !usedTiles.has(`${lx},${ly}`)) {
+            usedTiles.add(`${lx},${ly}`); break;
+          }
+          tries++;
         }
-
-        const mapData = get().mapData;
-        // 안전한 기본값: GRASS 대신 SEA(통과 불가) 사용 → mapData null 시 수쯙에 배치 방지
-        const terrain = mapData?.[ly]?.[lx] ?? TerrainType.SEA;
-        const validTerrain = terrain === TerrainType.GRASS || terrain === TerrainType.PATH || terrain === TerrainType.FOREST || terrain === TerrainType.BEACH;
-        const playable = isPlayableTile(lx, ly, MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
-
-        if (validTerrain && playable && !usedTiles.has(`${lx},${ly}`)) {
-          found = true;
+        if (tries >= 200) {
+          const fallback = findNearestValidTile(lx, ly);
+          lx = fallback.lx; ly = fallback.ly;
           usedTiles.add(`${lx},${ly}`);
-          break;
         }
-        tries++;
-      }
-
-      // 200회 시도 후에도 유효 타일을 컴지 못한 경우 → 가장 가까운 유효 타일으로 fallback (SEA/CLIFF 절대 배치 방지)
-      if (!found) {
-        const fallback = findNearestValidTile(lx, ly);
-        lx = fallback.lx;
-        ly = fallback.ly;
-        usedTiles.add(`${lx},${ly}`);
       }
 
       const id = `unit-${Date.now()}-${i}`;

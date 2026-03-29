@@ -571,9 +571,10 @@ function BubbleAnchorSync() {
     if (!unit) return;
 
     // 유닛 현재 화면 위치 추적 (logicalX/Y 기준 → 픽셀)
-    // 이동 중에는 unit.x/y가 실제 렌더 좌표와 맞음
+    // - 주의: 여기서 Y축을 직접 빼면 PIXI 컨테이너의 (1,0.5) 스케일 및 45도 회전을 거치면서 우상단 평행이동으로 왜곡됨.
+    // 좌표 자체(Tile Base 기준)는 그대로 넘기고 UI Layer에서 스크린 Y 좌표를 빼줘야 올바르게 수직 상승함.
     const screenX = unit.x;
-    const screenY = unit.y - 20; // 토큰 상단 여백
+    const screenY = unit.y;
 
     // 이전 앵커와 같으면 업데이트 스킵 (불필요한 리렌더 방지)
     const prevAnchor = state.bubbleAnchor;

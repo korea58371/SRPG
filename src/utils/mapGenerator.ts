@@ -1,7 +1,9 @@
 import { createNoise2D } from 'simplex-noise';
 import { TerrainType } from '../types/gameTypes';
 import type { MapObjectData } from '../types/gameTypes';
+import type { Province } from '../types/appTypes';
 import { MAP_CONFIG, getTileDarkness, isPlayableTile } from '../constants/gameConfig';
+import type { ProvinceWithCells } from './provinceGenerator';
 
 interface Point { x: number; y: number; }
 
@@ -113,6 +115,7 @@ function makeFbm(scale: number) {
   const n1 = createNoise2D();
   const n2 = createNoise2D();
   const n3 = createNoise2D();
+
   return (x: number, y: number): number => {
     const nx = x / scale, ny = y / scale;
     return (
@@ -732,4 +735,95 @@ export function generateMapTexture(
   }
 
   return canvas;
+}
+
+// ─── 전략맵 보로노이 셀 기반 전술맵 설정 추출 함수 ──────────────────────────────────────────────
+export function computeGeographyConfig(prov: Province, currentMap: ProvinceWithCells): GeographyConfig | undefined {
+  if (!currentMap) return undefined;
+  
+  let profile: 'plains' | 'highlands' | 'mixed' | 'desert' | 'snow' = 'mixed';
+  if (['peak', 'mountain', 'hill'].includes(prov.terrainType)) profile = 'highlands';
+  else if (['plains', 'savanna'].includes(prov.terrainType)) profile = 'plains';
+  else if (prov.terrainType === 'desert') profile = 'desert';
+  else if (['tundra', 'ice'].includes(prov.terrainType)) profile = 'snow';
+  
+  const provCells = currentMap.allCells.filter(c => c.provinceId === prov.id);
+  
+  // 1. 후보 셀 찾기 (자기 자신 + 인접 영지 + 바다)
+  const candidateSet = new Set<string>([prov.id, ...prov.adjacentIds, ...prov.navalAdjacentIds]);
+  const candidates = currentMap.allCells.filter(c => 
+      c.isOcean || c.terrain === 'ocean' || c.terrain === 'coastal' || (c.provinceId && candidateSet.has(c.provinceId))
+  );
+
+  // 2. 바운딩 박스 및 스케일 계산
+  let minCx = Infinity, maxCx = -Infinity;
+  let minCy = Infinity, maxCy = -Infinity;
+  provCells.forEach(c => {
+      if (c.cx < minCx) minCx = c.cx;
+      if (c.cx > maxCx) maxCx = c.cx;
+      if (c.cy < minCy) minCy = c.cy;
+      if (c.cy > maxCy) maxCy = c.cy;
+  });
+  
+  const cx = (minCx + maxCx) / 2;
+  const cy = (minCy + maxCy) / 2;
+  const radiusX = (maxCx - minCx) / 2;
+  const radiusY = (maxCy - minCy) / 2;
+  // 여백 확보 (약 40%). 매우 작은 섬/초소형 영지의 경우 바다가 보일 수 있도록 최소 반지름(60)을 강제합니다.
+  const MIN_RADIUS = 60;
+  const renderRadius = Math.max(radiusX, radiusY, MIN_RADIUS) * 1.4;
+
+  // 3. 맵 해상도 기반 마스크 생성
+  const W = MAP_CONFIG.WIDTH;
+  const H = MAP_CONFIG.HEIGHT;
+  const shapeMask: number[][] = [];
+  
+  for (let ty = 0; ty < H; ty++) {
+      shapeMask[ty] = [];
+      for (let tx = 0; tx < W; tx++) {
+          // 아이소메트릭 화면 기준으로 중심점(W/2, H/2)부터의 상대 좌표
+          const dx = tx - W/2;
+          const dy = ty - H/2;
+          // 인게임 쿼터뷰 렌더링 시 나타나는 실제 월드 방향으로 변환 (정확한 회전각 보정)
+          const vx = (dx + dy) * 0.5;
+          const vy = (dy - dx) * 0.5;
+          
+          // 월드 맵 좌표로 투영 (배열 인덱스 범위를 정확히 radius 반경으로 매핑)
+          const wx = cx + vx * (renderRadius / (W/2));
+          const wy = cy + vy * (renderRadius / (H/2));
+
+          // 가장 가까운 마이크로셀 검색 (nearest neighbor)
+          let closestDist = Infinity;
+          let closestCell = candidates[0];
+          for (let i = 0; i < candidates.length; i++) {
+              const cInfo = candidates[i];
+              const dist = (cInfo.cx - wx)**2 + (cInfo.cy - wy)**2;
+              if (dist < closestDist) {
+                  closestDist = dist;
+                  closestCell = cInfo;
+              }
+          }
+
+          // 1: 내 영지 (Land)
+          // 0: 타 영지 육지 (가장자리 경계 / 길 연결 가능 지점)
+          // -1: 진짜 바다 (접근 불가/고도 낮춤)
+          if (closestCell) {
+              if (closestCell.isOcean || closestCell.terrain === 'ocean') {
+                  shapeMask[ty].push(-1);
+              } else if (closestCell.provinceId === prov.id) {
+                  shapeMask[ty].push(1);
+              } else {
+                  shapeMask[ty].push(0);
+              }
+          } else {
+              shapeMask[ty].push(-1);
+          }
+      }
+  }
+  
+  return { 
+      terrainProfile: profile, 
+      waterLayout: 'none', // 내부 호수/바다 등도 이제 마스크가 담당
+      shapeMask 
+  };
 }

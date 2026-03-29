@@ -11,6 +11,23 @@ import { useAppStore } from '../store/appStore';
 import type { DialogueEmotion } from '../types/dialogueTypes';
 import { getCharacterImageUrl } from '../utils/characterAssets';
 
+// ─── 카메라 타입 & 아이소메트릭 worldToScreen 변환 ───────────────────────────
+// FloatingDamageLayer와 동일한 변환 로직 (App.tsx BattleScreen camera 기준)
+export interface Camera { x: number; y: number; scale: number }
+
+function worldToScreen(wx: number, wy: number, camera: Camera): { sx: number; sy: number } {
+  const cos45 = Math.SQRT1_2;
+  const sin45 = Math.SQRT1_2;
+  const rx  = wx * cos45 - wy * sin45;
+  const ry  = wx * sin45 + wy * cos45;
+  const scx = rx;
+  const scy = ry * 0.5;
+  return {
+    sx: scx * camera.scale + camera.x,
+    sy: scy * camera.scale + camera.y,
+  };
+}
+
 // ─── 타이프라이터 훅 ──────────────────────────────────────────────────────────
 function useBattleTypewriter(text: string, speed = 20) {
   const [displayed, setDisplayed] = useState('');
@@ -66,12 +83,11 @@ const PORTRAIT_SIZE  = 72;
 const MARGIN         = 16;
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
-const BattleDialogueBubble: React.FC = () => {
+const BattleDialogueBubble: React.FC<{ camera?: Camera }> = ({ camera }) => {
   const activeDialogue   = useGameStore(s => s.activeDialogue);
   const currentLineIndex = useGameStore(s => s.currentLineIndex);
   const bubbleAnchor     = useGameStore(s => s.bubbleAnchor);
   const advanceLine      = useGameStore(s => s.advanceLine);
-  const closeDialogue    = useGameStore(s => s.closeDialogue);
   const characters       = useAppStore(s => s.characters);
 
   // 전투 컨텍스트만 담당
@@ -84,24 +100,36 @@ const BattleDialogueBubble: React.FC = () => {
   const character   = characters[line.speakerId] ?? null;
   const speakerName = line.speakerName ?? character?.name ?? line.speakerId;
   const portraitUrl = character ? getCharacterImageUrl(character.id, 'bust') : null;
-  const isLast      = currentLineIndex >= activeDialogue.lines.length - 1;
   const { border, glow, nameColor } = getEmotionColors(line.emotion);
+
+  // ─── bubbleAnchor(World) → 화면 좌표 변환 ─────────────────────────────────────────
+  let anchorScreenX = window.innerWidth / 2;
+  let anchorScreenY = window.innerHeight / 2;
+
+  if (bubbleAnchor && camera) {
+    const { sx, sy } = worldToScreen(bubbleAnchor.x, bubbleAnchor.y, camera);
+    anchorScreenX = sx;
+    // 캐릭터 토큰 위로 올리기 위해, isometric 변환이 "모두 끝난 뒤" 시각적인 화면 축(Y축)에서만 위로 올립니다.
+    const VISUAL_Y_OFFSET = 70; // 캐릭터 높이 대략적 px
+    anchorScreenY = sy - VISUAL_Y_OFFSET * camera.scale;
+  } else if (bubbleAnchor && !camera) {
+    // camera 없으면 간단한 폴백 (canvas 중앙)
+    anchorScreenX = window.innerWidth  / 2;
+    anchorScreenY = window.innerHeight / 2;
+  }
 
   // ─── 화면 경계 clamp ──────────────────────────────────────────────────
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const TAIL_H = 10;
 
-  // 기본 위치: 앵커 위쪽 (translateY(-100%) 효과를 직접 계산)
-  let rawLeft = bubbleAnchor.x - BUBBLE_W / 2;
-  let rawTop  = bubbleAnchor.y - BUBBLE_H_MIN - TAIL_H - MARGIN;
+  let rawLeft = anchorScreenX - BUBBLE_W / 2;
+  let rawTop  = anchorScreenY - BUBBLE_H_MIN - TAIL_H - MARGIN;
 
-  // 좌우 clamp
   const clampedLeft = Math.max(MARGIN, Math.min(vw - BUBBLE_W - MARGIN, rawLeft));
-  // 위쪽에 공간 없으면 아래로 뒤집기
   const flipDown    = rawTop < MARGIN;
   const clampedTop  = flipDown
-    ? bubbleAnchor.y + TAIL_H + MARGIN
+    ? anchorScreenY + TAIL_H + MARGIN
     : Math.max(MARGIN, Math.min(vh - BUBBLE_H_MIN - MARGIN, rawTop));
 
   return (
@@ -116,18 +144,14 @@ const BattleDialogueBubble: React.FC = () => {
           0%, 100% { opacity: 1; }
           50%       { opacity: 0; }
         }
-        @keyframes bdbCuePulse {
-          0%, 100% { opacity: 0.45; }
-          50%       { opacity: 1;    }
-        }
         @keyframes bdbPortraitPop {
           from { transform: scale(0.85); opacity: 0; }
           to   { transform: scale(1);    opacity: 1; }
         }
       `}</style>
 
-      {/* 클릭 투과 루트 레이어 */}
-      <div style={rootStyle}>
+      {/* 전체 화면 클릭 할 수 있는 투명 오버레이 */}
+      <div style={rootStyle} onClick={advanceLine}>
         {/* 말풍선 본체 */}
         <div
           key={`bubble-${activeDialogue.id}-${currentLineIndex}`}
@@ -138,7 +162,6 @@ const BattleDialogueBubble: React.FC = () => {
             borderColor: border,
             boxShadow: `0 0 0 1px ${border}33, 0 6px 30px rgba(0,0,0,0.65), inset 0 0 20px ${glow}`,
           }}
-          onClick={advanceLine}
         >
           {/* ── 포트레이트 + 대사 영역 ── */}
           <div style={contentRowStyle}>
@@ -160,16 +183,11 @@ const BattleDialogueBubble: React.FC = () => {
 
             {/* 텍스트 영역 */}
             <div style={textColStyle}>
-              {/* 화자 이름 + 닫기 */}
+              {/* 화자 이름 */}
               <div style={headerStyle}>
                 <span style={{ ...speakerNameStyle, color: nameColor }}>
                   {speakerName}
                 </span>
-                <button
-                  style={closeBtnStyle}
-                  onClick={e => { e.stopPropagation(); closeDialogue(); }}
-                  title="닫기 (ESC)"
-                >✕</button>
               </div>
 
               {/* 대사 타이프라이터 */}
@@ -181,17 +199,7 @@ const BattleDialogueBubble: React.FC = () => {
             </div>
           </div>
 
-          {/* ── 하단 진행 표시줄 ── */}
-          <div style={footerStyle}>
-            <span style={progressStyle}>
-              {currentLineIndex + 1} / {activeDialogue.lines.length}
-            </span>
-            <span style={{ ...cueStyle, color: isLast ? '#86efac' : 'rgba(255,255,255,0.45)' }}>
-              {isLast ? '▪ 완료' : '▸ 클릭 또는 Space'}
-            </span>
-          </div>
-
-          {/* ── 말풍선 꼬리 (위/아래 방향 자동) ── */}
+          {/* 말풍선 꼬리 (위/아래 방향 자동) */}
           <div style={flipDown ? tailUpStyle : { ...tailDownStyle, borderTopColor: 'rgba(10,11,24,0.97)' }} />
         </div>
       </div>
@@ -305,27 +313,15 @@ const textColStyle: React.CSSProperties = {
 const headerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
-  marginBottom: 2,
+  paddingBottom: '8px',
+  borderBottom: '1px solid rgba(255,255,255,0.06)',
 };
 
 const speakerNameStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: '0.1em',
-  fontFamily: "'Noto Sans KR', sans-serif",
-  textTransform: 'uppercase' as const,
-};
-
-const closeBtnStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: 'rgba(255,255,255,0.28)',
-  fontSize: 11,
-  cursor: 'pointer',
-  padding: '1px 3px',
-  lineHeight: 1,
-  flexShrink: 0,
+  fontWeight: 800,
+  fontSize: '15px',
+  letterSpacing: '0.05em',
+  textShadow: '0 2px 4px rgba(0,0,0,0.8)',
 };
 
 const textStyle: React.CSSProperties = {
@@ -342,30 +338,9 @@ const cursorStyle: React.CSSProperties = {
   display: 'inline-block',
   fontSize: 10,
   animation: 'bdbCursorBlink 0.65s infinite',
-  opacity: 0.9,
-  marginLeft: 1,
+  pointerEvents: 'auto', // bubble 꼬리가 이벤트를 막지 않도록
 };
 
-const footerStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  marginTop: 6,
-  paddingTop: 5,
-  borderTop: '1px solid rgba(255,255,255,0.07)',
-};
-
-const progressStyle: React.CSSProperties = {
-  fontSize: 10,
-  color: 'rgba(255,255,255,0.22)',
-  fontFamily: 'monospace',
-};
-
-const cueStyle: React.CSSProperties = {
-  fontSize: 10,
-  letterSpacing: '0.05em',
-  animation: 'bdbCuePulse 1.4s ease-in-out infinite',
-};
 
 // 꼬리: 아래 방향 (말풍선이 앵커 위쪽에 있을 때)
 const tailDownStyle: React.CSSProperties = {

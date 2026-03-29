@@ -28,7 +28,8 @@ import { useGameStore } from './store/gameStore';
 import { useAppStore }  from './store/appStore';
 import { useInteractionManager } from './hooks/useInteractionManager';
 import { useBattleDialogueTrigger } from './hooks/useBattleDialogueTrigger';
-import { generateMapData } from './utils/mapGenerator';
+import { generateMapData, computeGeographyConfig } from './utils/mapGenerator';
+import { generateProvinces } from './utils/provinceGenerator';
 import { MAP_CONFIG, PLAYER_FACTION }   from './constants/gameConfig';
 
 // 화면 컴포넌트
@@ -229,6 +230,7 @@ const clampCamera = (cam: { x: number; y: number; scale: number }) => ({
 function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const setMapData          = useGameStore(s => s.setMapData);
   const setCities           = useGameStore(s => s.setCities);
+  const setSpawnZones       = useGameStore(s => s.setSpawnZones);
   const setBattleType       = useGameStore(s => s.setBattleType);
   const setBiome            = useGameStore(s => s.setBiome);
   const initUnits           = useGameStore(s => s.initUnits);
@@ -243,6 +245,7 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
   const clearBattleResult   = useGameStore(s => s.clearBattleResult);
   const resolveBattle       = useAppStore(s => s.resolveBattle);
   const pendingBattle       = useAppStore(s => s.pendingBattle);
+  const worldSeed           = useAppStore(s => s.worldSeed);
   const provinces           = useAppStore(s => s.provinces);
   const { onTileClick }     = useInteractionManager();
 
@@ -254,11 +257,21 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
 
   // 맵 초기화 (전투 진입 시마다)
   useEffect(() => {
-    const { map, elevMap, cities, mapInfo, mapObjects } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT);
+    let config = undefined;
+    if (pendingBattle && pendingBattle.defenderProvinceId) {
+       const worldMapData = generateProvinces(1440, 820, worldSeed); // Re-calculate cell geometries
+       const targetProv = worldMapData.provinces[pendingBattle.defenderProvinceId];
+       if (targetProv) {
+          config = computeGeographyConfig(targetProv, worldMapData);
+       }
+    }
+
+    const { map, elevMap, cities, mapInfo, mapObjects, spawnZones } = generateMapData(MAP_CONFIG.WIDTH, MAP_CONFIG.HEIGHT, config);
     setMapData(map, elevMap, mapObjects);
     setCities(cities);
+    setSpawnZones(spawnZones);
     setBiome(mapInfo);
-  }, [setMapData, setCities, setBiome]);
+  }, [setMapData, setCities, setSpawnZones, setBiome, pendingBattle, worldSeed]);
 
   // 전투 결과 감지 → appStore로 전달
   useEffect(() => {
@@ -651,7 +664,7 @@ function BattleScreen({ onAbandonRequest }: { onAbandonRequest: () => void }) {
       <FieldMenu />
       <UnitListModal />
       {/* 전투 중 대화 말풍선 — PixiJS 레이어 위, z-900 */}
-      <BattleDialogueBubble />
+      <BattleDialogueBubble camera={camera} />
     </div>
   );
 }

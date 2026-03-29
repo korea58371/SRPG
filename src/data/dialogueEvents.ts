@@ -304,8 +304,123 @@ export const CELIA_EVENTS: DialogueEvent[] = [
   },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// char_001 (기본 주인공 지휘관) 전투 이벤트 — 치트 전투 즉시 확인 가능
+// characterId: 'char_001' — gameStateSlice initUnits (cheat 모드)에서 unit-p-0에 할당
+// ─────────────────────────────────────────────────────────────────────────────
+export const CHAR_001_EVENTS: DialogueEvent[] = [
+  // ── 전투 시작 (BATTLE_START) ──────────────────────────────────────────────
+  {
+    id: 'char001_battle_start_first',
+    title: 'char_001 첫 출진',
+    context: 'BATTLE',
+    once: true,
+    priority: 10,
+    battlePhase: 'TURN_START',
+    trigger: {
+      context: 'BATTLE',
+      condition: and(
+        IS_CHARACTER('char_001'),
+        IS_BATTLE_START,
+        NOT_YET_PLAYED('char001_battle_start_first'),
+      ),
+    },
+    lines: [
+      {
+        speakerId: 'char_001',
+        speakerName: '지휘관',
+        text: '전군, 전진하라. 오늘의 전장은 우리 것이다!',
+        emotion: 'serious',
+      },
+      {
+        speakerId: 'char_001',
+        speakerName: '지휘관',
+        text: '물러서는 자는 없다. 승리만이 우리의 길이다.',
+        emotion: 'serious',
+      },
+    ],
+  },
+
+  // ── 턴 시작 반복 대사 (TURN_START) ───────────────────────────────────────
+  {
+    id: 'char001_turn_start_repeat',
+    title: 'char_001 턴 시작 (반복)',
+    context: 'BATTLE',
+    once: false,
+    priority: 0,
+    battlePhase: 'TURN_START',
+    trigger: {
+      context: 'BATTLE',
+      condition: and(
+        IS_CHARACTER('char_001'),
+        IS_TURN_START,
+      ),
+    },
+    lines: [
+      {
+        speakerId: 'char_001',
+        speakerName: '지휘관',
+        text: '내 차례다. 움직인다.',
+        emotion: 'normal',
+      },
+    ],
+  },
+
+  // ── HP 위기 (HP < 30%) ─────────────────────────────────────────────────
+  {
+    id: 'char001_low_hp',
+    title: 'char_001 HP 위기',
+    context: 'BATTLE',
+    once: false,
+    priority: 5,
+    battlePhase: 'TURN_START',
+    trigger: {
+      context: 'BATTLE',
+      condition: and(
+        IS_CHARACTER('char_001'),
+        IS_TURN_START,
+        HP_BELOW(30),
+      ),
+    },
+    lines: [
+      {
+        speakerId: 'char_001',
+        speakerName: '지휘관',
+        text: '큭... 아직이다. 여기서 쓰러질 수는 없어!',
+        emotion: 'serious',
+      },
+    ],
+  },
+
+  // ── 적 처치 (ON_KILL) ──────────────────────────────────────────────────
+  {
+    id: 'char001_on_kill',
+    title: 'char_001 처치 대사',
+    context: 'BATTLE',
+    once: false,
+    priority: 8,
+    battlePhase: 'ON_KILL',
+    trigger: {
+      context: 'BATTLE',
+      condition: and(
+        IS_CHARACTER('char_001'),
+        leaf((ctx) => ctx.battleEvent === 'ON_KILL'),
+      ),
+    },
+    lines: [
+      {
+        speakerId: 'char_001',
+        speakerName: '지휘관',
+        text: '하나 처리했다. 계속 전진!',
+        emotion: 'serious',
+      },
+    ],
+  },
+];
+
 // ─── 전체 이벤트 풀 (캐릭터별 배열을 평탄화) ──────────────────────────────
 export const ALL_DIALOGUE_EVENTS: DialogueEvent[] = [
   ...CELIA_EVENTS,
+  ...CHAR_001_EVENTS,   // char_001 전투 이벤트
   // 추후 다른 캐릭터 이벤트 배열을 여기에 spread
 ];

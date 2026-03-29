@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { Unit, TerrainType, MapObjectData, BattleType, TilePos, FactionId, LevelObjective } from '../../types/gameTypes';
-import type { MapInfo } from '../../utils/mapGenerator';
+import type { MapInfo, SpawnZone } from '../../utils/mapGenerator';
 import type { BattleOutcome } from '../../types/appTypes';
 import type { DialogueSlice } from '../../types/dialogueTypes';
 
@@ -31,11 +31,14 @@ export interface GameStateSlice {
   battleType: BattleType;
   biome: MapInfo | null;
 
+  spawnZones: SpawnZone[];
+
   victoryCondition: LevelObjective | null;
   defeatCondition: LevelObjective | null;
 
   setMapData: (mapData: TerrainType[][], elevMap: number[][], mapObjects: MapObjectData[]) => void;
   setCities: (cities: { x: number; y: number }[]) => void;
+  setSpawnZones: (zones: SpawnZone[]) => void;
   setBattleType: (type: BattleType) => void;
   setBiome: (biome: MapInfo) => void;
   initUnits: (mapWidth: number, mapHeight: number, attackerFactionId: FactionId, defenderFactionId: FactionId) => void;
